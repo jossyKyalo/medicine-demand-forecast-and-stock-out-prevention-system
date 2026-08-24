@@ -20,8 +20,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Global variables for our ML artifacts
+ 
 preprocessor_clf = None
 classifier_stockout = None
 
