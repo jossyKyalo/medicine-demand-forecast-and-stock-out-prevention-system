@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from "react";
 import {
-  Activity, ShieldAlert, PackageCheck, AlertCircle, 
-  CheckCircle2, Stethoscope, FileText, TrendingDown, 
-  X, ShoppingCart, Plus, LogOut, ChevronRight
+  Activity, ShieldAlert, PackageCheck, AlertCircle,
+  CheckCircle2, Stethoscope, FileText, TrendingDown,
+  X, ShoppingCart, Plus, LogOut, ChevronRight, UploadCloud
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
+import Papa from "papaparse";
 
 interface PredictionData {
   sku: string;
@@ -20,6 +21,7 @@ interface PredictionData {
 export default function Dashboard() {
   const [predictions, setPredictions] = useState<PredictionData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
   const [selectedPO, setSelectedPO] = useState<PredictionData | null>(null);
   const [orderQuantity, setOrderQuantity] = useState<number>(500);
@@ -41,25 +43,102 @@ export default function Dashboard() {
     router.push("/login");
   };
 
+  // 1. UPDATED: Fetch real data from Supabase
   useEffect(() => {
-    const fetchPredictions = async () => {
+    const fetchInventory = async () => {
       try {
-        const mockData = [
-          { sku: "AMOX-250", name: "Amoxicillin 250mg", days_to_depletion: 4, stockout_risk: "Critical", reorder_recommended: true },
-          { sku: "IBUP-400", name: "Ibuprofen 400mg", days_to_depletion: 12, stockout_risk: "Warning", reorder_recommended: true },
-          { sku: "PARA-500", name: "Paracetamol 500mg", days_to_depletion: 45, stockout_risk: "Safe", reorder_recommended: false },
-          { sku: "AZIT-500", name: "Azithromycin 500mg", days_to_depletion: 2, stockout_risk: "Critical", reorder_recommended: true },
-        ];
-        setTimeout(() => {
-          setPredictions(mockData);
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          router.push("/login");
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('inventory')
+          .select('*')
+          .eq('user_id', user.id);
+
+        if (error) throw error;
+
+        // If no data exists, trigger the onboarding screen
+        if (!data || data.length === 0) {
+          setNeedsOnboarding(true);
           setLoading(false);
-        }, 800);
+        } else {
+          // Map DB columns to UI state (we will hook this to FastAPI next!)
+          const formattedData = data.map(item => ({
+            sku: item.sku || "N/A",
+            name: item.medicine,
+            days_to_depletion: Math.floor((item.closing_stock || 0) / (item.expected_demand || 1)),
+            stockout_risk: "Pending AI Analysis", // Placeholder until batch inference
+            reorder_recommended: false
+          }));
+
+          setPredictions(formattedData);
+          setNeedsOnboarding(false);
+          setLoading(false);
+        }
       } catch (error) {
-        console.error("Failed to fetch predictions:", error);
+        console.error("Failed to fetch inventory:", error);
+        setLoading(false);
       }
     };
-    fetchPredictions();
-  }, []);
+
+    fetchInventory();
+  }, [router, supabase]);
+
+  // 2. NEW: Handle CSV Upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+
+    const { data: { user } } = await supabase.auth.getUser();
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        // Format the CSV rows and clean empty strings for the database
+        const formattedData = results.data.map((row: any) => {
+          const cleanedRow: any = { ...row };
+
+          // Loop through every column and convert "" to null to prevent BigInt errors
+          for (const key in cleanedRow) {
+            if (cleanedRow[key] === "") {
+              cleanedRow[key] = null;
+            }
+          }
+
+          cleanedRow.user_id = user?.id;
+          cleanedRow.sku = row.sku || `${String(row.medicine).substring(0, 3).toUpperCase()}-100`;
+
+          return cleanedRow;
+        });
+
+        // Insert into Supabase
+        const { error } = await supabase.from('inventory').insert(formattedData);
+
+        if (!error) {
+          // Map to UI and unlock dashboard
+          const uiData = formattedData.map(item => ({
+            sku: item.sku,
+            name: item.medicine,
+            days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
+            stockout_risk: "Pending AI Analysis",
+            reorder_recommended: false
+          }));
+
+          setPredictions(uiData);
+          setNeedsOnboarding(false);
+        } else {
+          console.error("Upload Error:", error);
+          alert("Failed to upload data to database.");
+        }
+        setLoading(false);
+      }
+    });
+  };
 
   const criticalCount = predictions.filter(p => p.stockout_risk === "Critical").length;
   const warningCount = predictions.filter(p => p.stockout_risk === "Warning").length;
@@ -73,14 +152,11 @@ export default function Dashboard() {
 
   const handleManualInference = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
-      // 1. Send the data to your FastAPI backend
       const response = await fetch("http://127.0.0.1:8000/api/v1/predict/manual", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: manualData.name,
           sku: manualData.sku,
@@ -90,30 +166,60 @@ export default function Dashboard() {
         }),
       });
 
-      // 2. Handle server errors (e.g., if FastAPI is down)
       if (!response.ok) {
         throw new Error(`API Error: ${response.status}`);
       }
 
-      // 3. Parse the AI prediction sent back from Python
       const newPrediction: PredictionData = await response.json();
 
-      // 4. Update the UI table with the new result
       setPredictions([newPrediction, ...predictions]);
-      
-      // 5. Clear the form and close the modal
       setManualData({ name: "", sku: "", currentStock: "", dailyDemand: "", leadTime: "" });
       setIsManualModalOpen(false);
-      
+
     } catch (error) {
       console.error("Failed to fetch prediction:", error);
       alert("Unable to connect to the Inference Engine. Ensure your FastAPI server is running.");
     }
   };
 
+  // 3. NEW: The Onboarding UI Block
+  if (needsOnboarding) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white p-6 relative overflow-hidden">
+        <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/40 via-slate-900 to-slate-900"></div>
+
+        <div className="bg-slate-800/50 backdrop-blur-xl p-10 rounded-3xl border border-slate-700 max-w-lg text-center shadow-2xl">
+          <div className="bg-emerald-500/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 border border-emerald-500/30">
+            <PackageCheck size={40} className="text-emerald-400" />
+          </div>
+          <h1 className="text-3xl font-extrabold mb-3 tracking-tight">Welcome to Triage</h1>
+          <p className="text-slate-400 mb-8 text-sm leading-relaxed">
+            Your dashboard is currently empty. Upload your facility's historical inventory data (CSV) to initialize your predictive AI models.
+          </p>
+
+          <label className="bg-emerald-600 hover:bg-emerald-500 cursor-pointer px-8 py-4 rounded-xl font-bold transition-all shadow-lg hover:shadow-emerald-900/50 flex items-center justify-center gap-3 w-full group">
+            {loading ? (
+              <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+            ) : (
+              <>
+                <UploadCloud size={20} className="group-hover:-translate-y-1 transition-transform" />
+                Upload Inventory CSV
+              </>
+            )}
+            <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} disabled={loading} />
+          </label>
+
+          <button onClick={handleLogOut} className="mt-6 text-sm text-slate-500 hover:text-slate-300 font-medium">
+            Sign out instead
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ... The rest of your existing Dashboard return statement starts here
   return (
     <div className="relative min-h-screen text-slate-800 font-sans selection:bg-emerald-200 overflow-hidden">
-       
       <div className="fixed inset-0 -z-20 w-full h-full bg-slate-900">
         <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-80">
           <source src="dashboard-background-video.mp4" type="video/mp4" />
@@ -122,7 +228,6 @@ export default function Dashboard() {
       <div className="fixed inset-0 -z-10 bg-slate-50/80 backdrop-blur-sm"></div>
 
       <div className="p-6 md:p-8 relative z-10 max-w-7xl mx-auto">
-         
         <header className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-emerald-900/95 backdrop-blur-xl p-6 rounded-3xl shadow-xl border border-emerald-700/50 text-white">
           <div className="flex items-center gap-4">
             <div className="bg-emerald-400/20 p-3.5 rounded-2xl border border-emerald-400/30 shadow-inner">
@@ -133,7 +238,7 @@ export default function Dashboard() {
               <p className="text-emerald-200/80 text-sm mt-0.5 font-medium">Predictive Stock-Out Prevention Engine</p>
             </div>
           </div>
-          
+
           <div className="flex flex-wrap gap-3">
             <button
               onClick={() => setIsManualModalOpen(true)}
@@ -152,9 +257,8 @@ export default function Dashboard() {
             </button>
           </div>
         </header>
- 
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          
           <div className="bg-gradient-to-br from-white to-rose-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
             <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-rose-600 group-hover:scale-110 transition-transform duration-500"><TrendingDown size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
@@ -166,7 +270,7 @@ export default function Dashboard() {
               <p className="text-sm text-slate-500 mt-2 font-medium">SKUs depleting before lead time</p>
             </div>
           </div>
- 
+
           <div className="bg-gradient-to-br from-white to-amber-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
             <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-amber-600 group-hover:scale-110 transition-transform duration-500"><AlertCircle size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
@@ -177,7 +281,7 @@ export default function Dashboard() {
               <p className="text-5xl font-black text-slate-900 tracking-tight">{warningCount}</p>
               <p className="text-sm text-slate-500 mt-2 font-medium">Within 7-day safety threshold</p>
             </div>
-          </div> 
+          </div>
 
           <div className="bg-gradient-to-br from-white to-emerald-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
             <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-emerald-600 group-hover:scale-110 transition-transform duration-500"><PackageCheck size={120} /></div>
@@ -191,7 +295,7 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
- 
+
         <div className="bg-white/90 backdrop-blur-xl border border-white/60 rounded-3xl shadow-xl overflow-hidden">
           <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white/50">
             <div className="flex items-center gap-3">
@@ -203,7 +307,7 @@ export default function Dashboard() {
           {loading ? (
             <div className="p-16 text-center">
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-emerald-200 border-t-emerald-600 mb-4"></div>
-              <p className="text-slate-500 font-medium">Querying ML predictions...</p>
+              <p className="text-slate-500 font-medium">Querying database...</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -228,9 +332,9 @@ export default function Dashboard() {
                           <div className="flex items-baseline gap-1">
                             <span className="text-lg font-bold text-slate-900">{item.days_to_depletion}</span>
                             <span className="text-slate-500 font-medium text-xs">days left</span>
-                          </div> 
+                          </div>
                           <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                            <div 
+                            <div
                               className={`h-full rounded-full ${item.days_to_depletion < 7 ? 'bg-rose-500' : item.days_to_depletion < 15 ? 'bg-amber-400' : 'bg-emerald-500'}`}
                               style={{ width: `${Math.min((item.days_to_depletion / 60) * 100, 100)}%` }}
                             ></div>
@@ -241,7 +345,8 @@ export default function Dashboard() {
                         <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border 
                           ${item.stockout_risk === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200/70" :
                             item.stockout_risk === "Warning" ? "bg-amber-50 text-amber-700 border-amber-200/70" :
-                              "bg-emerald-50 text-emerald-700 border-emerald-200/70"
+                              item.stockout_risk === "Safe" ? "bg-emerald-50 text-emerald-700 border-emerald-200/70" :
+                                "bg-slate-50 text-slate-700 border-slate-200/70" // Catch-all for "Pending"
                           }`}>
                           {item.stockout_risk === "Critical" && <ShieldAlert size={14} />}
                           {item.stockout_risk === "Warning" && <AlertCircle size={14} />}
@@ -271,7 +376,8 @@ export default function Dashboard() {
           )}
         </div>
       </div>
- 
+
+      {/* Modals remain exactly the same */}
       {selectedPO && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 transform scale-100 animate-in zoom-in-95 duration-200">
@@ -326,7 +432,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
- 
+
       {isManualModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 transform scale-100 animate-in zoom-in-95 duration-200">
