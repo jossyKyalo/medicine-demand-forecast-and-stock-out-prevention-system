@@ -44,8 +44,22 @@ export default function Dashboard() {
   const supabase = createClient();
 
   const handleLogOut = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
+    try { 
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        console.error("Sign out error:", error.message); 
+        localStorage.clear();
+      }
+ 
+      router.refresh();
+ 
+      router.replace("/login");
+
+    } catch (err) {
+      console.error("Unexpected error during sign out:", err); 
+      window.location.href = "/login";
+    }
   };
 
   useEffect(() => {
@@ -66,12 +80,12 @@ export default function Dashboard() {
 
         if (data && data.length > 0) {
           const formattedData = data.map(item => ({
-             id: item.record_id || Math.random().toString(),
-             sku: item.sku || "N/A",
-             name: item.medicine,
-             days_to_depletion: Math.floor((item.closing_stock || 0) / (item.expected_demand || 1)),
-             stockout_risk: "Pending AI Analysis",
-             reorder_recommended: false
+            id: item.record_id || Math.random().toString(),
+            sku: item.sku || "N/A",
+            name: item.medicine,
+            days_to_depletion: Math.floor((item.closing_stock || 0) / (item.expected_demand || 1)),
+            stockout_risk: "Pending AI Analysis",
+            reorder_recommended: false
           }));
           setPredictions(formattedData);
         }
@@ -81,22 +95,22 @@ export default function Dashboard() {
         setLoading(false);
       }
     };
-    
+
     fetchInventory();
   }, [router, supabase]);
 
   const downloadCsvTemplate = () => {
     const columns = [
-      "record_id", "date", "year", "month", "quarter", "week_of_year", "day_of_week", 
-      "facility_type", "facility_size", "facility_location", "medicine", "medicine_dosage_form", 
-      "registered_patients", "outpatient_visits", "prescriptions_issued", "expected_demand", 
-      "previous_day_demand", "previous_week_demand", "demand_7_days_avg", "demand_14_days_avg", 
-      "demand_30_days_avg", "demand_90_days_avg", "opening_stock", "stock_received", "stock_adjustments", 
-      "dispensed_quantity", "closing_stock", "stock_out", "stock_out_days", "lost_demand_units", 
-      "supplier_type", "supplier_reliability", "lead_time_days", "purchase_orders", "purchase_order_quantity", 
-      "order_delay_days", "safety_stock", "reorder_point", "reorder_flag", "inventory_value_kes", 
-      "expiry_risk", "expired_quantity", "damaged_quantity", "unit_cost_kes", "inventory_turnover", 
-      "demand_supply_ratio", "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days", 
+      "record_id", "date", "year", "month", "quarter", "week_of_year", "day_of_week",
+      "facility_type", "facility_size", "facility_location", "medicine", "medicine_dosage_form",
+      "registered_patients", "outpatient_visits", "prescriptions_issued", "expected_demand",
+      "previous_day_demand", "previous_week_demand", "demand_7_days_avg", "demand_14_days_avg",
+      "demand_30_days_avg", "demand_90_days_avg", "opening_stock", "stock_received", "stock_adjustments",
+      "dispensed_quantity", "closing_stock", "stock_out", "stock_out_days", "lost_demand_units",
+      "supplier_type", "supplier_reliability", "lead_time_days", "purchase_orders", "purchase_order_quantity",
+      "order_delay_days", "safety_stock", "reorder_point", "reorder_flag", "inventory_value_kes",
+      "expiry_risk", "expired_quantity", "damaged_quantity", "unit_cost_kes", "inventory_turnover",
+      "demand_supply_ratio", "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days",
       "forecast_next_30_days", "forecast_error", "forecast_error_percentage", "stockout_within_30_days"
     ];
 
@@ -140,15 +154,15 @@ export default function Dashboard() {
           const { error } = await supabase
             .from('inventory')
             .upsert(formattedData, { onConflict: 'record_id' });
-          
+
           if (!error) {
             const uiData = formattedData.map(item => ({
-               id: item.record_id || Math.random().toString(),
-               sku: item.sku,
-               name: item.medicine,
-               days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
-               stockout_risk: "Pending AI Analysis",
-               reorder_recommended: false
+              id: item.record_id || Math.random().toString(),
+              sku: item.sku,
+              name: item.medicine,
+              days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
+              stockout_risk: "Pending AI Analysis",
+              reorder_recommended: false
             }));
             setPredictions(uiData);
             setNotification({
@@ -220,13 +234,12 @@ export default function Dashboard() {
       <div className="fixed inset-0 -z-10 bg-slate-50/80 backdrop-blur-sm"></div>
 
       <div className="p-6 md:p-8 relative z-10 max-w-7xl mx-auto">
-        
+
         {notification && (
-          <div className={`mb-6 p-4 rounded-2xl flex items-center justify-between border shadow-lg backdrop-xl transition-all animate-in fade-in duration-300 ${
-            notification.type === 'success' 
-              ? 'bg-emerald-900/90 text-emerald-100 border-emerald-700' 
+          <div className={`mb-6 p-4 rounded-2xl flex items-center justify-between border shadow-lg backdrop-xl transition-all animate-in fade-in duration-300 ${notification.type === 'success'
+              ? 'bg-emerald-900/90 text-emerald-100 border-emerald-700'
               : 'bg-amber-900/90 text-amber-100 border-amber-700'
-          }`}>
+            }`}>
             <div className="flex items-center gap-3">
               {notification.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-400 shrink-0" /> : <AlertTriangle size={20} className="text-amber-400 shrink-0" />}
               <p className="text-sm font-semibold">{notification.text}</p>
@@ -367,7 +380,7 @@ export default function Dashboard() {
                           ${item.stockout_risk === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200/70" :
                             item.stockout_risk === "Warning" ? "bg-amber-50 text-amber-700 border-amber-200/70" :
                               item.stockout_risk === "Safe" ? "bg-emerald-50 text-emerald-700 border-emerald-200/70" :
-                              "bg-slate-50 text-slate-700 border-slate-200/70"
+                                "bg-slate-50 text-slate-700 border-slate-200/70"
                           }`}>
                           {item.stockout_risk}
                         </span>
@@ -422,18 +435,24 @@ export default function Dashboard() {
 
               <div className="space-y-3">
                 <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Instructions:</h4>
-                <ul className="space-y-2 text-xs font-medium">
-                  <li className="flex items-start gap-2">
-                    <span className="bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">1</span>
-                    Fill out all required inventory fields (such as <code className="text-emerald-700 font-bold">record_id</code>, <code className="text-emerald-700 font-bold">medicine</code>, <code className="text-emerald-700 font-bold">closing_stock</code>, and <code className="text-emerald-700 font-bold">expected_demand</code>).
+                <ul className="space-y-3 text-xs font-medium">
+                  <li className="flex items-start gap-3">
+                    <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded shrink-0">1</span>
+                    <p className="leading-relaxed">
+                      Fill out all required inventory fields (such as <code className="text-emerald-700 font-bold">record_id</code>, <code className="text-emerald-700 font-bold">medicine</code>, <code className="text-emerald-700 font-bold">closing_stock</code>, and <code className="text-emerald-700 font-bold">expected_demand</code>).
+                    </p>
                   </li>
-                  <li className="flex items-start gap-2">
-                    <span className="bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">2</span>
-                    Save your document strictly as a **CSV (Comma Delimited)** file format.
+                  <li className="flex items-start gap-3">
+                    <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded shrink-0">2</span>
+                    <p className="leading-relaxed">
+                      Save your document strictly as a **CSV (Comma Delimited)** file format.
+                    </p>
                   </li>
-                  <li className="flex items-start gap-2">
-                    <span className="bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">3</span>
-                    Avoid altering or deleting any of the mandatory column header names.
+                  <li className="flex items-start gap-3">
+                    <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded shrink-0">3</span>
+                    <p className="leading-relaxed">
+                      Avoid altering or deleting any of the mandatory column header names.
+                    </p>
                   </li>
                 </ul>
               </div>
@@ -446,11 +465,10 @@ export default function Dashboard() {
                 </div>
                 <button
                   onClick={downloadCsvTemplate}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                    hasDownloadedTemplate 
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${hasDownloadedTemplate
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                       : 'bg-slate-900 text-white hover:bg-emerald-600 shadow-sm'
-                  }`}
+                    }`}
                 >
                   {hasDownloadedTemplate ? <><Check size={14} /> Template Downloaded</> : <><Download size={14} /> Download Template</>}
                 </button>
@@ -458,17 +476,16 @@ export default function Dashboard() {
             </div>
 
             <div className="p-6 border-t border-slate-100 flex gap-3 justify-end bg-slate-50/50">
-              <button 
-                onClick={() => setIsUploadModalOpen(false)} 
+              <button
+                onClick={() => setIsUploadModalOpen(false)}
                 className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-colors shadow-sm"
               >
                 Cancel
               </button>
 
               {/* Proceed to File Selection */}
-              <label className={`px-6 py-2.5 rounded-xl text-sm font-bold text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 ${
-                hasDownloadedTemplate ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-400 hover:bg-slate-500'
-              }`}>
+              <label className={`px-6 py-2.5 rounded-xl text-sm font-bold text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 ${hasDownloadedTemplate ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-400 hover:bg-slate-500'
+                }`}>
                 <UploadCloud size={16} /> Proceed to Upload
                 <input type="file" accept=".csv" className="hidden" onChange={handleFileUploadTrigger} />
               </label>
