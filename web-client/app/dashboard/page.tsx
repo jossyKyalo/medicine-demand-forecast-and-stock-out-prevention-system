@@ -194,8 +194,10 @@ export default function Dashboard() {
 
   const handleManualInference = async (e: React.FormEvent) => {
     e.preventDefault();
+    setNotification(null);
 
     try {
+      // 1. Send data to FastAPI for the prediction
       const response = await fetch("http://127.0.0.1:8000/api/v1/predict/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -210,16 +212,54 @@ export default function Dashboard() {
 
       if (!response.ok) throw new Error(`API Error: ${response.status}`);
 
-      const newPrediction: PredictionData = await response.json();
-      setPredictions([newPrediction, ...predictions]);
+      // The AI prediction results (e.g., stockout_risk)
+      const aiResult = await response.json(); 
+
+      // 2. Format the data for Supabase
+      const { data: { user } } = await supabase.auth.getUser();
+      const newRecordId = `MANUAL-${Date.now()}`; // Generate a unique ID for manual entries
+
+      const dbRecord = {
+        user_id: user?.id,
+        record_id: newRecordId,
+        sku: manualData.sku,
+        medicine: manualData.name,
+        closing_stock: Number(manualData.currentStock),
+        expected_demand: Number(manualData.dailyDemand),
+        lead_time_days: Number(manualData.leadTime),
+        // We leave the rest of the 50 columns blank for manual entries!
+      };
+
+      // 3. Save to Supabase
+      const { error } = await supabase.from('inventory').insert([dbRecord]);
+
+      if (error) throw error;
+
+      // 4. Update the UI immediately so the user sees it
+      const newUIRow: PredictionData = {
+        id: newRecordId,
+        sku: manualData.sku,
+        name: manualData.name,
+        days_to_depletion: Math.floor(Number(manualData.currentStock) / Number(manualData.dailyDemand)),
+        stockout_risk: aiResult.stockout_risk || "Pending", 
+        reorder_recommended: aiResult.reorder_recommended || false
+      };
+
+      setPredictions([newUIRow, ...predictions]);
+      
+      // 5. Clean up and show success message
       setManualData({ name: "", sku: "", currentStock: "", dailyDemand: "", leadTime: "" });
       setIsManualModalOpen(false);
+      setNotification({
+        type: 'success',
+        text: `${manualData.name} prediction completed and saved to your dashboard!`
+      });
 
     } catch (error) {
-      console.error("Failed to fetch prediction:", error);
+      console.error("Failed to process manual prediction:", error);
       setNotification({
         type: 'error',
-        text: 'Unable to connect to the Inference Engine. Ensure your FastAPI server is running.'
+        text: 'Failed to run prediction or save to database. Ensure your backend is running.'
       });
     }
   };
