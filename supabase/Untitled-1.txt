@@ -1,0 +1,1 @@
+py -c "import sklearn, joblib; print('scikit-learn:', sklearn.__version__); print('joblib:', joblib.__version__)"

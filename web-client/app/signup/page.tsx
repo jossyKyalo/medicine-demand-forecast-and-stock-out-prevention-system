@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { Activity, Lock, Mail, User, ArrowRight, Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
@@ -13,7 +12,6 @@ export default function SignUpPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const router = useRouter();
   const supabase = createClient();
   const [showPassword, setShowPassword] = useState(false);
 
@@ -22,7 +20,7 @@ export default function SignUpPage() {
     setLoading(true);
     setError(null);
 
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -53,7 +51,7 @@ export default function SignUpPage() {
           </div>
           <h2 className="text-2xl font-bold text-slate-900 mb-4">Check your email</h2>
           <p className="text-slate-600 mb-8">
-            We've sent a verification link to <span className="font-bold text-slate-900">{email}</span>.
+            We&apos;ve sent a verification link to <span className="font-bold text-slate-900">{email}</span>.
             Please click the link to activate your account.
           </p>
           <Link href="/login" className="text-emerald-600 font-bold hover:text-emerald-700 transition-colors">
