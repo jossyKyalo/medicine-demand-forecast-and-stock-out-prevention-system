@@ -4,13 +4,14 @@ import { useState, useEffect } from "react";
 import {
   Activity, ShieldAlert, PackageCheck, AlertCircle,
   CheckCircle2, Stethoscope, FileText, TrendingDown,
-  X, ShoppingCart, Plus, LogOut, ChevronRight, UploadCloud
+  X, ShoppingCart, Plus, LogOut, ChevronRight, UploadCloud, AlertTriangle, Download, Info, Check
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import Papa from "papaparse";
 
 interface PredictionData {
+  id: string;
   sku: string;
   name: string;
   days_to_depletion: number;
@@ -21,7 +22,11 @@ interface PredictionData {
 export default function Dashboard() {
   const [predictions, setPredictions] = useState<PredictionData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Modal State for CSV Upload Instructions
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [hasDownloadedTemplate, setHasDownloadedTemplate] = useState(false);
 
   const [selectedPO, setSelectedPO] = useState<PredictionData | null>(null);
   const [orderQuantity, setOrderQuantity] = useState<number>(500);
@@ -43,7 +48,6 @@ export default function Dashboard() {
     router.push("/login");
   };
 
-  // 1. UPDATED: Fetch real data from Supabase
   useEffect(() => {
     const fetchInventory = async () => {
       try {
@@ -60,83 +64,107 @@ export default function Dashboard() {
 
         if (error) throw error;
 
-        // If no data exists, trigger the onboarding screen
-        if (!data || data.length === 0) {
-          setNeedsOnboarding(true);
-          setLoading(false);
-        } else {
-          // Map DB columns to UI state (we will hook this to FastAPI next!)
+        if (data && data.length > 0) {
           const formattedData = data.map(item => ({
-            sku: item.sku || "N/A",
-            name: item.medicine,
-            days_to_depletion: Math.floor((item.closing_stock || 0) / (item.expected_demand || 1)),
-            stockout_risk: "Pending AI Analysis", // Placeholder until batch inference
-            reorder_recommended: false
+             id: item.record_id || Math.random().toString(),
+             sku: item.sku || "N/A",
+             name: item.medicine,
+             days_to_depletion: Math.floor((item.closing_stock || 0) / (item.expected_demand || 1)),
+             stockout_risk: "Pending AI Analysis",
+             reorder_recommended: false
           }));
-
           setPredictions(formattedData);
-          setNeedsOnboarding(false);
-          setLoading(false);
         }
+        setLoading(false);
       } catch (error) {
         console.error("Failed to fetch inventory:", error);
         setLoading(false);
       }
     };
-
+    
     fetchInventory();
   }, [router, supabase]);
 
-  // 2. NEW: Handle CSV Upload
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const downloadCsvTemplate = () => {
+    const columns = [
+      "record_id", "date", "year", "month", "quarter", "week_of_year", "day_of_week", 
+      "facility_type", "facility_size", "facility_location", "medicine", "medicine_dosage_form", 
+      "registered_patients", "outpatient_visits", "prescriptions_issued", "expected_demand", 
+      "previous_day_demand", "previous_week_demand", "demand_7_days_avg", "demand_14_days_avg", 
+      "demand_30_days_avg", "demand_90_days_avg", "opening_stock", "stock_received", "stock_adjustments", 
+      "dispensed_quantity", "closing_stock", "stock_out", "stock_out_days", "lost_demand_units", 
+      "supplier_type", "supplier_reliability", "lead_time_days", "purchase_orders", "purchase_order_quantity", 
+      "order_delay_days", "safety_stock", "reorder_point", "reorder_flag", "inventory_value_kes", 
+      "expiry_risk", "expired_quantity", "damaged_quantity", "unit_cost_kes", "inventory_turnover", 
+      "demand_supply_ratio", "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days", 
+      "forecast_next_30_days", "forecast_error", "forecast_error_percentage", "stockout_within_30_days"
+    ];
+
+    const csvContent = "data:text/csv;charset=utf-8," + columns.join(",");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "triage_inventory_template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Mark that they have downloaded the template
+    setHasDownloadedTemplate(true);
+  };
+
+  const handleFileUploadTrigger = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true);
+    setNotification(null);
+    setIsUploadModalOpen(false); // Close instructions modal
 
-    const { data: { user } } = await supabase.auth.getUser();
-
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (results) => {
-        // Format the CSV rows and clean empty strings for the database
-        const formattedData = results.data.map((row: any) => {
-          const cleanedRow: any = { ...row };
-
-          // Loop through every column and convert "" to null to prevent BigInt errors
-          for (const key in cleanedRow) {
-            if (cleanedRow[key] === "") {
-              cleanedRow[key] = null;
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: async (results) => {
+          const formattedData = results.data.map((row: any) => {
+            const cleanedRow: any = { ...row };
+            for (const key in cleanedRow) {
+              if (cleanedRow[key] === "") {
+                cleanedRow[key] = null;
+              }
             }
+            cleanedRow.user_id = user?.id;
+            cleanedRow.sku = row.sku || `${String(row.medicine || 'MED').substring(0, 3).toUpperCase()}-100`;
+            return cleanedRow;
+          });
+
+          const { error } = await supabase
+            .from('inventory')
+            .upsert(formattedData, { onConflict: 'record_id' });
+          
+          if (!error) {
+            const uiData = formattedData.map(item => ({
+               id: item.record_id || Math.random().toString(),
+               sku: item.sku,
+               name: item.medicine,
+               days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
+               stockout_risk: "Pending AI Analysis",
+               reorder_recommended: false
+            }));
+            setPredictions(uiData);
+            setNotification({
+              type: 'success',
+              text: 'Batch inventory uploaded successfully! New stock metrics have been synchronized.'
+            });
+          } else {
+            console.error("Upload Error:", error);
+            setNotification({
+              type: 'error',
+              text: 'Some medicines in this batch are already tracked or required fields are missing.'
+            });
           }
-
-          cleanedRow.user_id = user?.id;
-          cleanedRow.sku = row.sku || `${String(row.medicine).substring(0, 3).toUpperCase()}-100`;
-
-          return cleanedRow;
-        });
-
-        // Insert into Supabase
-        const { error } = await supabase.from('inventory').insert(formattedData);
-
-        if (!error) {
-          // Map to UI and unlock dashboard
-          const uiData = formattedData.map(item => ({
-            sku: item.sku,
-            name: item.medicine,
-            days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
-            stockout_risk: "Pending AI Analysis",
-            reorder_recommended: false
-          }));
-
-          setPredictions(uiData);
-          setNeedsOnboarding(false);
-        } else {
-          console.error("Upload Error:", error);
-          alert("Failed to upload data to database.");
+          setLoading(false);
         }
-        setLoading(false);
-      }
+      });
     });
   };
 
@@ -166,58 +194,22 @@ export default function Dashboard() {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`API Error: ${response.status}`);
 
       const newPrediction: PredictionData = await response.json();
-
       setPredictions([newPrediction, ...predictions]);
       setManualData({ name: "", sku: "", currentStock: "", dailyDemand: "", leadTime: "" });
       setIsManualModalOpen(false);
 
     } catch (error) {
       console.error("Failed to fetch prediction:", error);
-      alert("Unable to connect to the Inference Engine. Ensure your FastAPI server is running.");
+      setNotification({
+        type: 'error',
+        text: 'Unable to connect to the Inference Engine. Ensure your FastAPI server is running.'
+      });
     }
   };
 
-  // 3. NEW: The Onboarding UI Block
-  if (needsOnboarding) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white p-6 relative overflow-hidden">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/40 via-slate-900 to-slate-900"></div>
-
-        <div className="bg-slate-800/50 backdrop-blur-xl p-10 rounded-3xl border border-slate-700 max-w-lg text-center shadow-2xl">
-          <div className="bg-emerald-500/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 border border-emerald-500/30">
-            <PackageCheck size={40} className="text-emerald-400" />
-          </div>
-          <h1 className="text-3xl font-extrabold mb-3 tracking-tight">Welcome to Triage</h1>
-          <p className="text-slate-400 mb-8 text-sm leading-relaxed">
-            Your dashboard is currently empty. Upload your facility's historical inventory data (CSV) to initialize your predictive AI models.
-          </p>
-
-          <label className="bg-emerald-600 hover:bg-emerald-500 cursor-pointer px-8 py-4 rounded-xl font-bold transition-all shadow-lg hover:shadow-emerald-900/50 flex items-center justify-center gap-3 w-full group">
-            {loading ? (
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-            ) : (
-              <>
-                <UploadCloud size={20} className="group-hover:-translate-y-1 transition-transform" />
-                Upload Inventory CSV
-              </>
-            )}
-            <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} disabled={loading} />
-          </label>
-
-          <button onClick={handleLogOut} className="mt-6 text-sm text-slate-500 hover:text-slate-300 font-medium">
-            Sign out instead
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ... The rest of your existing Dashboard return statement starts here
   return (
     <div className="relative min-h-screen text-slate-800 font-sans selection:bg-emerald-200 overflow-hidden">
       <div className="fixed inset-0 -z-20 w-full h-full bg-slate-900">
@@ -228,6 +220,23 @@ export default function Dashboard() {
       <div className="fixed inset-0 -z-10 bg-slate-50/80 backdrop-blur-sm"></div>
 
       <div className="p-6 md:p-8 relative z-10 max-w-7xl mx-auto">
+        
+        {notification && (
+          <div className={`mb-6 p-4 rounded-2xl flex items-center justify-between border shadow-lg backdrop-xl transition-all animate-in fade-in duration-300 ${
+            notification.type === 'success' 
+              ? 'bg-emerald-900/90 text-emerald-100 border-emerald-700' 
+              : 'bg-amber-900/90 text-amber-100 border-amber-700'
+          }`}>
+            <div className="flex items-center gap-3">
+              {notification.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-400 shrink-0" /> : <AlertTriangle size={20} className="text-amber-400 shrink-0" />}
+              <p className="text-sm font-semibold">{notification.text}</p>
+            </div>
+            <button onClick={() => setNotification(null)} className="text-white/70 hover:text-white p-1 rounded-full transition-colors">
+              <X size={18} />
+            </button>
+          </div>
+        )}
+
         <header className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-emerald-900/95 backdrop-blur-xl p-6 rounded-3xl shadow-xl border border-emerald-700/50 text-white">
           <div className="flex items-center gap-4">
             <div className="bg-emerald-400/20 p-3.5 rounded-2xl border border-emerald-400/30 shadow-inner">
@@ -240,14 +249,19 @@ export default function Dashboard() {
           </div>
 
           <div className="flex flex-wrap gap-3">
+            {/* Opens Instructions Modal Instead of File Picker Directly */}
+            <button
+              onClick={() => setIsUploadModalOpen(true)}
+              className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95"
+            >
+              <UploadCloud size={16} /> Upload Batch CSV
+            </button>
+
             <button
               onClick={() => setIsManualModalOpen(true)}
               className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95"
             >
               <Plus size={16} /> Manual Input
-            </button>
-            <button className="bg-white text-emerald-900 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-50 transition-all shadow-sm flex items-center gap-2 active:scale-95">
-              <FileText size={16} /> Export Report
             </button>
             <button
               onClick={handleLogOut}
@@ -258,9 +272,10 @@ export default function Dashboard() {
           </div>
         </header>
 
+        {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-gradient-to-br from-white to-rose-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
-            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-rose-600 group-hover:scale-110 transition-transform duration-500"><TrendingDown size={120} /></div>
+          <div className="bg-gradient-to-br from-white to-rose-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-rose-600"><TrendingDown size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
               <h3 className="font-bold text-slate-500 text-xs uppercase tracking-widest">Critical Risk</h3>
               <div className="bg-rose-100/80 text-rose-600 p-2.5 rounded-xl shadow-sm border border-rose-200/50"><ShieldAlert size={20} strokeWidth={2.5} /></div>
@@ -271,8 +286,8 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-white to-amber-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
-            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-amber-600 group-hover:scale-110 transition-transform duration-500"><AlertCircle size={120} /></div>
+          <div className="bg-gradient-to-br from-white to-amber-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-amber-600"><AlertCircle size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
               <h3 className="font-bold text-slate-500 text-xs uppercase tracking-widest">Approaching Buffer</h3>
               <div className="bg-amber-100/80 text-amber-700 p-2.5 rounded-xl shadow-sm border border-amber-200/50"><AlertCircle size={20} strokeWidth={2.5} /></div>
@@ -283,8 +298,8 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-white to-emerald-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
-            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-emerald-600 group-hover:scale-110 transition-transform duration-500"><PackageCheck size={120} /></div>
+          <div className="bg-gradient-to-br from-white to-emerald-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-emerald-600"><PackageCheck size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
               <h3 className="font-bold text-slate-500 text-xs uppercase tracking-widest">Total Monitored</h3>
               <div className="bg-emerald-100/80 text-emerald-700 p-2.5 rounded-xl shadow-sm border border-emerald-200/50"><PackageCheck size={20} strokeWidth={2.5} /></div>
@@ -296,6 +311,7 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Results Table */}
         <div className="bg-white/90 backdrop-blur-xl border border-white/60 rounded-3xl shadow-xl overflow-hidden">
           <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white/50">
             <div className="flex items-center gap-3">
@@ -308,6 +324,11 @@ export default function Dashboard() {
             <div className="p-16 text-center">
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-emerald-200 border-t-emerald-600 mb-4"></div>
               <p className="text-slate-500 font-medium">Querying database...</p>
+            </div>
+          ) : predictions.length === 0 ? (
+            <div className="p-16 text-center">
+              <p className="text-slate-500 font-medium mb-2">No inventory data found for this account.</p>
+              <p className="text-xs text-slate-400">Click "Upload Batch CSV" above to review instructions and template requirements.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -322,7 +343,7 @@ export default function Dashboard() {
                 </thead>
                 <tbody className="divide-y divide-slate-100/80">
                   {predictions.map((item) => (
-                    <tr key={item.sku} className="hover:bg-slate-50/80 transition-colors group">
+                    <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
                       <td className="px-6 py-4">
                         <div className="font-bold text-slate-900 text-base">{item.name}</div>
                         <div className="text-xs text-slate-500 font-medium mt-1">{item.sku}</div>
@@ -346,11 +367,8 @@ export default function Dashboard() {
                           ${item.stockout_risk === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200/70" :
                             item.stockout_risk === "Warning" ? "bg-amber-50 text-amber-700 border-amber-200/70" :
                               item.stockout_risk === "Safe" ? "bg-emerald-50 text-emerald-700 border-emerald-200/70" :
-                                "bg-slate-50 text-slate-700 border-slate-200/70" // Catch-all for "Pending"
+                              "bg-slate-50 text-slate-700 border-slate-200/70"
                           }`}>
-                          {item.stockout_risk === "Critical" && <ShieldAlert size={14} />}
-                          {item.stockout_risk === "Warning" && <AlertCircle size={14} />}
-                          {item.stockout_risk === "Safe" && <CheckCircle2 size={14} />}
                           {item.stockout_risk}
                         </span>
                       </td>
@@ -358,7 +376,7 @@ export default function Dashboard() {
                         {item.reorder_recommended ? (
                           <button
                             onClick={() => openPOModal(item)}
-                            className="bg-slate-900 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md hover:shadow-lg flex items-center gap-2 ml-auto active:scale-95"
+                            className="bg-slate-900 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 ml-auto active:scale-95"
                           >
                             <ShoppingCart size={14} /> Draft PO <ChevronRight size={14} className="opacity-70" />
                           </button>
@@ -377,65 +395,92 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Modals remain exactly the same */}
-      {selectedPO && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 transform scale-100 animate-in zoom-in-95 duration-200">
+      {/* CSV Upload Instructions & Requirement Modal */}
+      {isUploadModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100">
             <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
-              <div>
-                <h2 className="text-xl font-extrabold text-slate-900">Purchase Order</h2>
-                <p className="text-xs text-slate-500 mt-1 font-medium">Ref: PO-{Math.floor(Math.random() * 100000)} • Auto-Generated</p>
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-100 p-2.5 rounded-2xl text-emerald-700"><Info size={22} /></div>
+                <div>
+                  <h2 className="text-xl font-extrabold text-slate-900">Batch Upload Guidelines</h2>
+                  <p className="text-xs text-slate-500 mt-0.5 font-medium">Please review instructions before proceeding</p>
+                </div>
               </div>
-              <button onClick={closePOModal} className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-200 p-2.5 rounded-full transition-colors shadow-sm">
+              <button onClick={() => setIsUploadModalOpen(false)} className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-200 p-2.5 rounded-full transition-colors shadow-sm">
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6 space-y-6">
-              <div className="flex items-start justify-between bg-slate-50 p-5 rounded-2xl border border-slate-100">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Target SKU</p>
-                  <p className="text-lg font-bold text-slate-900">{selectedPO.name}</p>
-                  <p className="text-sm text-slate-500 font-medium">{selectedPO.sku}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Lead Time</p>
-                  <p className="text-lg font-bold text-slate-900">7 Days</p>
-                </div>
+
+            <div className="p-6 space-y-5 text-slate-600 text-sm">
+              <div className="bg-amber-50 border border-amber-200/60 p-4 rounded-2xl flex gap-3 text-amber-900">
+                <AlertTriangle size={20} className="shrink-0 text-amber-600 mt-0.5" />
+                <p className="text-xs leading-relaxed font-medium">
+                  <strong>Important:</strong> Your file must match the required schema. We strongly recommend downloading our official template if you haven't already.
+                </p>
               </div>
-              <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-5 flex gap-4">
-                <div className="bg-emerald-100 p-2 rounded-xl h-fit text-emerald-600"><Activity size={20} /></div>
-                <div>
-                  <h4 className="text-sm font-bold text-emerald-900">Model Recommendation</h4>
-                  <p className="text-sm text-emerald-800/80 mt-1.5 leading-relaxed">
-                    Predicted depletion in <span className="font-bold">{selectedPO.days_to_depletion} days</span>. Reordering {orderQuantity} units mitigates 30-day stock-out risk.
-                  </p>
-                </div>
+
+              <div className="space-y-3">
+                <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Instructions:</h4>
+                <ul className="space-y-2 text-xs font-medium">
+                  <li className="flex items-start gap-2">
+                    <span className="bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">1</span>
+                    Fill out all required inventory fields (such as <code className="text-emerald-700 font-bold">record_id</code>, <code className="text-emerald-700 font-bold">medicine</code>, <code className="text-emerald-700 font-bold">closing_stock</code>, and <code className="text-emerald-700 font-bold">expected_demand</code>).
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">2</span>
+                    Save your document strictly as a **CSV (Comma Delimited)** file format.
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded">3</span>
+                    Avoid altering or deleting any of the mandatory column header names.
+                  </li>
+                </ul>
               </div>
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Confirm Quantity (Units)</label>
-                <input
-                  type="number"
-                  value={orderQuantity}
-                  onChange={(e) => setOrderQuantity(Number(e.target.value))}
-                  className="w-full bg-white border border-slate-200 text-black text-lg font-bold rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 block p-3.5 shadow-sm transition-all outline-none"
-                />
+
+              {/* Template Download Step */}
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-slate-900">Need the template?</p>
+                  <p className="text-[11px] text-slate-500">Includes all 50+ machine learning headers</p>
+                </div>
+                <button
+                  onClick={downloadCsvTemplate}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                    hasDownloadedTemplate 
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                      : 'bg-slate-900 text-white hover:bg-emerald-600 shadow-sm'
+                  }`}
+                >
+                  {hasDownloadedTemplate ? <><Check size={14} /> Template Downloaded</> : <><Download size={14} /> Download Template</>}
+                </button>
               </div>
             </div>
+
             <div className="p-6 border-t border-slate-100 flex gap-3 justify-end bg-slate-50/50">
-              <button onClick={closePOModal} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-colors shadow-sm active:scale-95">
+              <button 
+                onClick={() => setIsUploadModalOpen(false)} 
+                className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-colors shadow-sm"
+              >
                 Cancel
               </button>
-              <button onClick={() => { alert("PO Submitted"); closePOModal(); }} className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-md flex items-center gap-2 active:scale-95">
-                Execute Order
-              </button>
+
+              {/* Proceed to File Selection */}
+              <label className={`px-6 py-2.5 rounded-xl text-sm font-bold text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 ${
+                hasDownloadedTemplate ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-400 hover:bg-slate-500'
+              }`}>
+                <UploadCloud size={16} /> Proceed to Upload
+                <input type="file" accept=".csv" className="hidden" onChange={handleFileUploadTrigger} />
+              </label>
             </div>
           </div>
         </div>
       )}
 
+      {/* Manual Input Modal */}
       {isManualModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 transform scale-100 animate-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100">
             <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
               <div>
                 <h2 className="text-xl font-extrabold text-slate-900">Run Inference</h2>
@@ -449,30 +494,30 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Medication Name</label>
-                  <input required type="text" value={manualData.name} onChange={e => setManualData({ ...manualData, name: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" placeholder="e.g. Insulin" />
+                  <input required type="text" value={manualData.name} onChange={e => setManualData({ ...manualData, name: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" placeholder="e.g. Insulin" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">SKU</label>
-                  <input required type="text" value={manualData.sku} onChange={e => setManualData({ ...manualData, sku: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" placeholder="INS-100" />
+                  <input required type="text" value={manualData.sku} onChange={e => setManualData({ ...manualData, sku: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" placeholder="INS-100" />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-4 border-t border-slate-100 pt-5">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Current Stock</label>
-                  <input required type="number" value={manualData.currentStock} onChange={e => setManualData({ ...manualData, currentStock: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
+                  <input required type="number" value={manualData.currentStock} onChange={e => setManualData({ ...manualData, currentStock: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Daily Demand</label>
-                  <input required type="number" value={manualData.dailyDemand} onChange={e => setManualData({ ...manualData, dailyDemand: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
+                  <input required type="number" value={manualData.dailyDemand} onChange={e => setManualData({ ...manualData, dailyDemand: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Lead (Days)</label>
-                  <input required type="number" value={manualData.leadTime} onChange={e => setManualData({ ...manualData, leadTime: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
+                  <input required type="number" value={manualData.leadTime} onChange={e => setManualData({ ...manualData, leadTime: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" />
                 </div>
               </div>
               <div className="pt-2 flex justify-end gap-3">
-                <button type="button" onClick={() => setIsManualModalOpen(false)} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 shadow-sm active:scale-95 transition-all">Cancel</button>
-                <button type="submit" className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-slate-900 hover:bg-emerald-600 flex items-center gap-2 shadow-md active:scale-95 transition-all">
+                <button type="button" onClick={() => setIsManualModalOpen(false)} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 shadow-sm transition-all">Cancel</button>
+                <button type="submit" className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-slate-900 hover:bg-emerald-600 flex items-center gap-2 shadow-md transition-all">
                   <Activity size={16} /> Predict
                 </button>
               </div>
