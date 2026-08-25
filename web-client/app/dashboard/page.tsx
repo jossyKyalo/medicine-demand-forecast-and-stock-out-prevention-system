@@ -127,7 +127,7 @@ export default function Dashboard() {
     setHasDownloadedTemplate(true);
   };
 
-  const handleFileUploadTrigger = (e: React.ChangeEvent<HTMLInputElement>) => {
+   const handleFileUploadTrigger = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true);
@@ -139,44 +139,83 @@ export default function Dashboard() {
         header: true,
         skipEmptyLines: true,
         complete: async (results) => {
-          const formattedData = results.data.map((row: any) => {
-            const cleanedRow: any = { ...row };
-            for (const key in cleanedRow) {
-              if (cleanedRow[key] === "") {
-                cleanedRow[key] = null;
+          try {
+            // 1. Clean the CSV data for the database 
+            const formattedData = results.data.map((row: any) => {
+              const cleanedRow: any = { ...row };
+              
+              for (const key in cleanedRow) {
+                // NEW: Delete "", "_1", "_2", etc. (any phantom column PapaParse renamed)
+                if (key.trim() === "" || key.match(/^_\d+$/)) {
+                  delete cleanedRow[key];
+                } 
+                // Convert empty cell values to null for the database
+                else if (cleanedRow[key] === "") {
+                  cleanedRow[key] = null;
+                }
               }
-            }
-            cleanedRow.user_id = user?.id;
-            cleanedRow.sku = row.sku || `${String(row.medicine || 'MED').substring(0, 3).toUpperCase()}-100`;
-            return cleanedRow;
-          });
+              
+              cleanedRow.user_id = user?.id;
+              cleanedRow.sku = row.sku || `${String(row.medicine || 'MED').substring(0, 3).toUpperCase()}-100`;
+              return cleanedRow;
+            });
 
-          const { error } = await supabase
-            .from('inventory')
-            .upsert(formattedData, { onConflict: 'record_id' });
-
-          if (!error) {
-            const uiData = formattedData.map(item => ({
-              id: item.record_id || Math.random().toString(),
+            // 2. Prepare the payload for FastAPI
+            const batchPayload = formattedData.map(item => ({
               sku: item.sku,
               name: item.medicine,
-              days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
-              stockout_risk: "Pending AI Analysis",
-              reorder_recommended: false
+              currentStock: Number(item.closing_stock) || 0,
+              dailyDemand: Number(item.expected_demand) || 1,
+              leadTime: Number(item.lead_time_days) || 7
             }));
+
+            // 3. Send the entire batch to Python for ML scoring
+            const response = await fetch("http://127.0.0.1:8000/api/v1/predict/batch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ items: batchPayload }),
+            });
+
+            if (!response.ok) throw new Error("Batch prediction API failed");
+            
+            // Array of { sku, stockout_risk, reorder_recommended }
+            const aiPredictions = await response.json(); 
+
+            // 4. Save the raw inventory data to Supabase
+            const { error } = await supabase
+              .from('inventory')
+              .upsert(formattedData, { onConflict: 'record_id' });
+
+            if (error) throw error;
+
+            // 5. Merge AI predictions with the React UI State
+            const uiData = formattedData.map(item => {
+              const matchingAI = aiPredictions.find((ai: any) => ai.sku === item.sku);
+              return {
+                id: item.record_id || Math.random().toString(),
+                sku: item.sku,
+                name: item.medicine,
+                days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
+                stockout_risk: matchingAI?.stockout_risk || "Safe",
+                reorder_recommended: matchingAI?.reorder_recommended || false
+              };
+            });
+
             setPredictions(uiData);
             setNotification({
               type: 'success',
-              text: 'Batch inventory uploaded successfully! New stock metrics have been synchronized.'
+              text: 'Batch processed! ML inferences generated and synchronized.'
             });
-          } else {
-            console.error("Upload Error:", error);
+
+          } catch (error) {
+            console.error("Batch Processing Error:", error);
             setNotification({
               type: 'error',
-              text: 'Some medicines in this batch are already tracked or required fields are missing.'
+              text: 'Failed to process batch predictions. Check your file formatting and AI backend connection.'
             });
+          } finally {
+            setLoading(false);
           }
-          setLoading(false);
         }
       });
     });
