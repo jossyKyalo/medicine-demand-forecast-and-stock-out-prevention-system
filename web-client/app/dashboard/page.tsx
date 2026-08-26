@@ -89,7 +89,7 @@ export default function Dashboard() {
     }
   };
 
-  const downloadCsvTemplate = () => { 
+  const downloadCsvTemplate = () => {
     const columns = [
       "record_id", "date", "year", "month", "quarter", "week_of_year", "day_of_week",
       "facility_type", "facility_size", "facility_location_type", "medicine", "medicine_category",
@@ -173,12 +173,12 @@ export default function Dashboard() {
           }
 
           const aiPredictions = await response.json();
- 
+
           const floatColumns = [
             "demand_7_days_avg", "demand_14_days_avg", "demand_30_days_avg", "demand_90_days_avg",
             "inventory_turnover", "unit_cost_kes", "inventory_value_kes", "forecast_error",
             "stockout_risk_score"
-          ]; 
+          ];
 
           const intColumns = [
             "year", "month", "quarter", "week_of_year", "day_of_week",
@@ -189,7 +189,7 @@ export default function Dashboard() {
             "order_delay_days", "safety_stock", "reorder_point", "expired_quantity", "damaged_quantity",
             "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days", "forecast_next_30_days",
             "stockout_within_30_days"
-          ];  
+          ];
 
           const textColumns = [
             "record_id", "date", "facility_type", "facility_size", "facility_location_type",
@@ -197,30 +197,30 @@ export default function Dashboard() {
             "supplier_reliability", "purchase_order_frequency", "orders_cancelled", "reorder_flag",
             "expiry_risk", "demand_shock", "forecast_error_percentage", "stockout_risk_category", "sku"
           ];
- 
+
           const inventoryPayload = formattedData.map(item => {
             const filteredRow: any = { user_id: user.id };
- 
+
             textColumns.forEach(col => {
               if (item[col] !== undefined && item[col] !== "") {
                 filteredRow[col] = String(item[col]);
               }
             });
- 
+
             floatColumns.forEach(col => {
               if (item[col] !== undefined && item[col] !== "") {
                 const parsed = Number(item[col]);
                 filteredRow[col] = isNaN(parsed) ? null : parsed;
               }
             });
-  
+
             intColumns.forEach(col => {
               if (item[col] !== undefined && item[col] !== "") {
                 const parsed = Number(item[col]);
                 filteredRow[col] = isNaN(parsed) ? null : Math.round(parsed);
               }
             });
- 
+
             if (item.stock_out !== undefined && item.stock_out !== "") {
               filteredRow.stock_out_flag = String(item.stock_out);
             }
@@ -230,7 +230,7 @@ export default function Dashboard() {
 
             return filteredRow;
           });
- 
+
           const { error: invError } = await supabase
             .from('inventory')
             .upsert(inventoryPayload, { onConflict: 'record_id' });
@@ -347,7 +347,7 @@ export default function Dashboard() {
     else await loadInventory();
   };
 
-  useEffect(() => { 
+  useEffect(() => {
     const currentHour = new Date().getHours();
     if (currentHour < 12) {
       setGreeting("Good morning");
@@ -364,7 +364,7 @@ export default function Dashboard() {
           router.push("/login");
           return;
         }
- 
+
         const rawName = user.user_metadata?.full_name || user.user_metadata?.name || "there";
         const firstName = rawName.split(" ")[0];
         setUserName(firstName.charAt(0).toUpperCase() + firstName.slice(1));
@@ -381,7 +381,7 @@ export default function Dashboard() {
         if (savedError) {
           setNotice(`Prediction history is unavailable: ${savedError.message}.`);
         }
- 
+
         setPredictions(savedPredictions || []);
         setLoading(false);
 
@@ -428,6 +428,7 @@ export default function Dashboard() {
       setNotice("Your session has expired. Please sign in again.");
       return;
     }
+
     const order: Omit<Order, "id" | "created_at"> & { user_id: string } = {
       user_id: user.id,
       po_reference: poReference,
@@ -437,16 +438,52 @@ export default function Dashboard() {
       days_to_depletion: selectedPO.days_to_depletion,
       status: "Review",
     };
+    
     const { data, error } = await supabase
       .from("orders")
       .insert(order)
       .select("id, po_reference, sku, medicine, quantity, days_to_depletion, status, created_at")
       .single();
+      
     if (error) {
       setNotice(error.code === "23505" ? `An active order already exists for ${selectedPO.name}.` : `Order was not saved: ${error.message}.`);
       return;
     }
+
     setOrders((currentOrders) => [data, ...currentOrders]);
+ 
+    const userEmail = user.email || "Procurement Officer";
+    const supplierEmail = "orders@supplier-pharmaceuticals.com"; 
+    
+    const rawSubject = `Purchase Order [${poReference}] - ${selectedPO.name}`;
+    const rawBody = 
+      `Hello,\n\n` +
+      `Please process the following urgent Purchase Order for our facility.\n\n` +
+      `----------------------------------------\n` +
+      `PO Reference: ${poReference}\n` +
+      `SKU / Medicine: ${selectedPO.sku} - ${selectedPO.name}\n` +
+      `Quantity Required: ${orderQuantity} units\n` +
+      `----------------------------------------\n\n` +
+      `Please confirm receipt of this order and provide an estimated delivery date.\n\n` +
+      `Best regards,\n` +
+      `${userName}\n` +
+      `${userEmail}`;
+ 
+    window.location.href = `mailto:${supplierEmail}?subject=${encodeURIComponent(rawSubject)}&body=${encodeURIComponent(rawBody)}`;
+ 
+    try {
+      const clipboardText = `To: ${supplierEmail}\nSubject: ${rawSubject}\n\n${rawBody}`;
+      await navigator.clipboard.writeText(clipboardText);
+      
+      setNotice(
+        `PO ${poReference} saved! We tried to open your email app. If it didn't open, the email draft has been copied to your clipboard. Just paste it into Gmail or Outlook!`
+      );
+    } catch (clipboardError) { 
+      setNotice(
+        `PO ${poReference} saved! If your email app didn't open automatically, please email ${supplierEmail} to request ${orderQuantity} units of ${selectedPO.name}.`
+      );
+    }
+
     setSelectedPO(null);
     setActiveSection("orders");
   };
@@ -517,9 +554,9 @@ export default function Dashboard() {
         medicine: manualData.name,
         closing_stock: currentStock,
         expected_demand: dailyDemand,
-        demand_7_days_avg: dailyDemand, // Fixes the 0 on the dashboard
+        demand_7_days_avg: dailyDemand,  
         lead_time_days: leadTime,
-        reorder_point: leadTime * dailyDemand, // Accurately calculates Reorder Point
+        reorder_point: leadTime * dailyDemand,  
       };
       await supabase.from('inventory').insert([dbRecord]);
       await loadInventory();
