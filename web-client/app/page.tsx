@@ -38,13 +38,18 @@ export default function LandingPage() {
             href="/login"
             className="group relative inline-flex items-center justify-center gap-3 px-8 py-4 text-base font-bold text-white bg-emerald-600 rounded-xl overflow-hidden transition-all hover:bg-emerald-700 shadow-lg hover:shadow-emerald-600/30"
           >
-            Launch Triage Dashboard
+            Launch Afya-Stock AI  
             <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
           </Link>
-          
-          <button className="px-8 py-4 text-base font-bold text-slate-800 bg-white/90 backdrop-blur-md border border-slate-200 rounded-xl hover:border-emerald-600 hover:text-emerald-700 transition-all shadow-sm">
+           
+          <a 
+            href={`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/docs`}
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center px-8 py-4 text-base font-bold text-slate-800 bg-white/90 backdrop-blur-md border border-slate-200 rounded-xl hover:border-emerald-600 hover:text-emerald-700 transition-all shadow-sm"
+          >
             View API Documentation
-          </button>
+          </a>
         </div>
  
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">

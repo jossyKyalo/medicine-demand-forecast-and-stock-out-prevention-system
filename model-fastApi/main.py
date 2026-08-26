@@ -10,8 +10,9 @@ import os
 from schemas import ManualInferenceRequest 
 
 app = FastAPI(
-    title="Triage Dashboard API",
-    description="Inference engine for medical supply chain stock-out prediction."
+    title="Afya-Stock AI API",
+    description="Medicine demand forecast and stock-out prevention system.",
+    version="1.0.0"
 )
 
  
