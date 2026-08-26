@@ -7,7 +7,7 @@ import { Activity, ShieldCheck, ArrowRight, BrainCircuit, Database, X } from "lu
 export default function LandingPage() { 
   const [activeModal, setActiveModal] = useState<'privacy' | 'terms' | null>(null);
  
-  const LIVE_API_DOCS = `${process.env.NEXT_PUBLIC_API_URL || 'https://medicine-demand-forecast-and-stock-out-9qje.onrender.com'}/docs`;
+  const LIVE_API_DOCS = `${process.env.NEXT_PUBLIC_API_URL || 'https://medicine-demand-forecast-and-stock-out-9qje.onrender.com/docs'}/docs`;
 
   return (
     <div className="relative min-h-screen flex flex-col text-slate-800 font-sans overflow-x-hidden">
