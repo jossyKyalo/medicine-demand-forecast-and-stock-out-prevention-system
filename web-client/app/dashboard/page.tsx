@@ -34,6 +34,7 @@ export default function Dashboard() {
   const [editingRecord, setEditingRecord] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>("");
   const [greeting, setGreeting] = useState<string>("Hello");
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   // Modal State for CSV Upload Instructions
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -441,25 +442,25 @@ export default function Dashboard() {
       days_to_depletion: selectedPO.days_to_depletion,
       status: "Review",
     };
-    
+
     const { data, error } = await supabase
       .from("orders")
       .insert(order)
       .select("id, po_reference, sku, medicine, quantity, days_to_depletion, status, created_at")
       .single();
-      
+
     if (error) {
       setNotice(error.code === "23505" ? `An active order already exists for ${selectedPO.name}.` : `Order was not saved: ${error.message}.`);
       return;
     }
 
     setOrders((currentOrders) => [data, ...currentOrders]);
- 
+
     const userEmail = user.email || "Procurement Officer";
-    const supplierEmail = "orders@supplier-pharmaceuticals.com"; 
-    
+    const supplierEmail = "orders@supplier-pharmaceuticals.com";
+
     const rawSubject = `Purchase Order [${poReference}] - ${selectedPO.name}`;
-    const rawBody = 
+    const rawBody =
       `Hello,\n\n` +
       `Please process the following urgent Purchase Order for our facility.\n\n` +
       `----------------------------------------\n` +
@@ -471,17 +472,17 @@ export default function Dashboard() {
       `Best regards,\n` +
       `${userName}\n` +
       `${userEmail}`;
- 
+
     window.location.href = `mailto:${supplierEmail}?subject=${encodeURIComponent(rawSubject)}&body=${encodeURIComponent(rawBody)}`;
- 
+
     try {
       const clipboardText = `To: ${supplierEmail}\nSubject: ${rawSubject}\n\n${rawBody}`;
       await navigator.clipboard.writeText(clipboardText);
-      
+
       setNotice(
         `PO ${poReference} saved! We tried to open your email app. If it didn't open, the email draft has been copied to your clipboard. Just paste it into Gmail or Outlook!`
       );
-    } catch (clipboardError) { 
+    } catch (clipboardError) {
       setNotice(
         `PO ${poReference} saved! If your email app didn't open automatically, please email ${supplierEmail} to request ${orderQuantity} units of ${selectedPO.name}.`
       );
@@ -557,9 +558,9 @@ export default function Dashboard() {
         medicine: manualData.name,
         closing_stock: currentStock,
         expected_demand: dailyDemand,
-        demand_7_days_avg: dailyDemand,  
+        demand_7_days_avg: dailyDemand,
         lead_time_days: leadTime,
-        reorder_point: leadTime * dailyDemand,  
+        reorder_point: leadTime * dailyDemand,
       };
       await supabase.from('inventory').insert([dbRecord]);
       await loadInventory();
@@ -595,7 +596,7 @@ export default function Dashboard() {
             <h2 className="text-xl font-bold text-slate-800">
               {activeModal === 'privacy' ? 'Privacy Policy' : 'Terms of Service'}
             </h2>
-            <button 
+            <button
               onClick={() => setActiveModal(null)}
               className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors"
             >
@@ -635,7 +636,7 @@ export default function Dashboard() {
             )}
           </div>
           <div className="p-4 border-t border-slate-100 bg-slate-50 text-right flex-shrink-0">
-            <button 
+            <button
               onClick={() => setActiveModal(null)}
               className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold rounded-lg transition-colors"
             >
@@ -660,8 +661,8 @@ export default function Dashboard() {
       {/* MAIN CONTENT WRAPPER */}
       <main className="flex-1 p-6 md:p-8 relative z-10 max-w-7xl mx-auto w-full">
 
-        <header className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-emerald-900/95 backdrop-blur-xl p-6 rounded-3xl shadow-xl border border-emerald-700/50 text-white">
-           <div className="flex items-center gap-4">
+        <header className="mb-8 flex flex-col xl:flex-row xl:items-center justify-between gap-6 bg-emerald-900/95 backdrop-blur-xl p-6 rounded-3xl shadow-xl border border-emerald-700/50 text-white">
+          <div className="flex items-center gap-4">
             <div className="bg-emerald-400/20 p-3.5 rounded-2xl border border-emerald-400/30 shadow-inner">
               <Stethoscope size={28} className="text-emerald-100" />
             </div>
@@ -673,28 +674,40 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          {/* Clean, neatly wrapped action buttons */}
+          <div className="flex flex-wrap items-center gap-2.5">
             <button
               onClick={() => setIsUploadModalOpen(true)}
               disabled={uploading}
-              className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95 disabled:opacity-60"
+              className="bg-emerald-800/60 text-emerald-50 border border-emerald-600/40 px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center gap-2 disabled:opacity-60"
             >
-              <UploadCloud size={16} /> {uploading ? "Processing Batch..." : "Upload Batch CSV"}
+              <UploadCloud size={15} /> {uploading ? "Processing..." : "Upload CSV"}
             </button>
             <button
               onClick={() => setIsManualModalOpen(true)}
-              className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95"
+              className="bg-emerald-800/60 text-emerald-50 border border-emerald-600/40 px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center gap-2"
             >
-              <Plus size={16} /> Manual Input
+              <Plus size={15} /> Manual Input
             </button>
-            <button onClick={() => setActiveSection("orders")} className="bg-white text-emerald-900 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-50 transition-all shadow-sm flex items-center gap-2 active:scale-95">
-              <ClipboardCheck size={16} /> View Orders
+            <button
+              onClick={() => setActiveSection("orders")}
+              className="bg-white text-emerald-900 px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-50 transition-all shadow-sm flex items-center gap-2"
+            >
+              <ClipboardCheck size={15} /> Orders
+            </button>
+            <button
+              onClick={() => setIsGuideOpen(true)}
+              className="bg-emerald-800/60 text-emerald-50 border border-emerald-600/40 px-3.5 py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-sm flex items-center gap-1.5"
+              title="User Guide"
+            >
+              <Info size={15} /> Guide
             </button>
             <button
               onClick={handleLogOut}
-              className="bg-transparent text-emerald-200 border border-emerald-700/50 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-all shadow-sm flex items-center gap-2 active:scale-95"
+              className="bg-transparent text-emerald-200 border border-emerald-700/40 px-3.5 py-2.5 rounded-xl text-xs font-bold hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-all shadow-sm flex items-center gap-1.5"
+              title="Sign Out"
             >
-              <LogOut size={16} /> Sign Out
+              <LogOut size={15} />
             </button>
           </div>
         </header>
@@ -1034,9 +1047,9 @@ export default function Dashboard() {
           <span>•</span>
           <button onClick={() => setActiveModal('terms')} className="hover:text-emerald-600 transition-colors">Terms of Service</button>
           <span>•</span>
-          <a 
+          <a
             href={`${API_BASE_URL}/docs`}
-            target="_blank" 
+            target="_blank"
             rel="noopener noreferrer"
             className="hover:text-emerald-600 transition-colors"
           >
@@ -1221,11 +1234,36 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Medication Name</label>
-                  <input required type="text" value={manualData.name} onChange={e => setManualData({ ...manualData, name: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" placeholder="e.g. Insulin" />
+                  <input
+                    required
+                    type="text"
+                    value={manualData.name}
+                    onChange={e => {
+                      const name = e.target.value;
+                      const generatedSku = name.trim().length >= 3
+                        ? `${name.trim().substring(0, 3).toUpperCase()}-100`
+                        : "";
+
+                      setManualData({
+                        ...manualData,
+                        name,
+                        sku: manualData.sku === "" || manualData.sku.length <= 2 ? generatedSku : manualData.sku
+                      });
+                    }}
+                    className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm"
+                    placeholder="e.g. Panadol 250"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">SKU</label>
-                  <input required type="text" value={manualData.sku} onChange={e => setManualData({ ...manualData, sku: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" placeholder="INS-100" />
+                  <input
+                    required
+                    type="text"
+                    value={manualData.sku}
+                    onChange={e => setManualData({ ...manualData, sku: e.target.value })}
+                    className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm"
+                    placeholder="INS-100"
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-4 border-t border-slate-100 pt-5">
@@ -1234,7 +1272,7 @@ export default function Dashboard() {
                   <input required type="number" value={manualData.currentStock} onChange={e => setManualData({ ...manualData, currentStock: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Daily Demand</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Average Daily Demand</label>
                   <input required type="number" value={manualData.dailyDemand} onChange={e => setManualData({ ...manualData, dailyDemand: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
                 </div>
                 <div>
@@ -1249,6 +1287,69 @@ export default function Dashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* USER GUIDE MODAL */}
+      {isGuideOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden text-left border border-slate-100">
+
+            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-100 p-2.5 rounded-2xl text-emerald-700">
+                  <Stethoscope size={22} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-extrabold text-slate-900">Afya-Stock AI User Guide</h2>
+                  <p className="text-xs text-slate-500 mt-0.5 font-medium">System terminology and methodology reference</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsGuideOpen(false)}
+                className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-200 p-2.5 rounded-full transition-colors shadow-sm"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-6 text-sm text-slate-600">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base mb-2">1. Key Metrics & Terminology</h3>
+                <ul className="space-y-2 text-xs font-medium bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <li><strong className="text-slate-900">SKU:</strong> A unique alphanumeric code (e.g., <code className="text-emerald-700 font-bold">INS-100</code>) identifying a medicine and dosage.</li>
+                  <li><strong className="text-slate-900">Depletion Horizon:</strong> Estimated days left before stock hits zero based on your current closing stock and average daily demand.</li>
+                  <li><strong className="text-slate-900">7-Day Forecast:</strong> Machine learning regression projection of how many units will be consumed over the next week.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="font-bold text-slate-900 text-base mb-2">2. Risk Assessment Levels</h3>
+                <ul className="space-y-2 text-xs font-medium bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <li><strong className="text-rose-600">Critical:</strong> Stock will deplete before your supplier's delivery lead time. Urgent reorder required.</li>
+                  <li><strong className="text-amber-600">Warning:</strong> Stock is within the 7-day safety threshold or approaching lead time bounds. Plan a restock soon.</li>
+                  <li><strong className="text-emerald-600">Safe:</strong> Inventory levels are fully optimized and secure.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="font-bold text-slate-900 text-base mb-2">3. How Calculations Work</h3>
+                <p className="text-xs leading-relaxed font-medium">
+                  The system calculates your <strong>Reorder Point</strong> using your <span className="text-emerald-700 font-bold">Average Daily Demand</span> multiplied by your <span className="text-emerald-700 font-bold">Lead Time Days</span>. This ensures you place purchase orders early enough to bridge the delivery gap without facing a shortage.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 border-t border-slate-100 bg-slate-50/50 text-right">
+              <button
+                onClick={() => setIsGuideOpen(false)}
+                className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-slate-900 hover:bg-emerald-600 transition-colors shadow-md"
+              >
+                Got it, thanks!
+              </button>
+            </div>
+
           </div>
         </div>
       )}
