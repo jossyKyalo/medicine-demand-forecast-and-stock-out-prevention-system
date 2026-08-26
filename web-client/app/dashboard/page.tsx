@@ -1,35 +1,66 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Activity, ShieldAlert, PackageCheck, AlertCircle,
   CheckCircle2, Stethoscope, FileText, TrendingDown,
-  X, ShoppingCart, Plus, LogOut, ChevronRight, UploadCloud, AlertTriangle, Download, Info, Check
+  X, ShoppingCart, Plus, LogOut, ChevronRight, ChevronLeft, Pencil, Trash2, Save, ClipboardList, ClipboardCheck, UploadCloud, Download, Info, Check, AlertTriangle
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import Papa from "papaparse";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+
 interface PredictionData {
-  id: string;
+  id?: number;
   sku: string;
   name: string;
   days_to_depletion: number;
   stockout_risk: string;
   reorder_recommended: boolean;
+  forecast_next_7_days: number;
+  source?: string;
 }
 
 export default function Dashboard() {
   const [predictions, setPredictions] = useState<PredictionData[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(true);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const [editingRecord, setEditingRecord] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string>("");
+  const [greeting, setGreeting] = useState<string>("Hello");
 
   // Modal State for CSV Upload Instructions
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [hasDownloadedTemplate, setHasDownloadedTemplate] = useState(false);
 
+  const [inventoryForm, setInventoryForm] = useState<InventoryItem>({
+    record_id: "",
+    sku: "",
+    medicine: "",
+    closing_stock: 0,
+    demand_7_days_avg: 0,
+    lead_time_days: 0,
+    reorder_point: 0,
+    unit_cost_kes: 0,
+  });
+
   const [selectedPO, setSelectedPO] = useState<PredictionData | null>(null);
   const [orderQuantity, setOrderQuantity] = useState<number>(500);
+  const [poReference, setPoReference] = useState("");
+  const [activeSection, setActiveSection] = useState<"inference" | "records" | "orders">("inference");
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [inferencePage, setInferencePage] = useState(1);
+  const [inferencePageSize, setInferencePageSize] = useState(5);
+  const [inventoryPage, setInventoryPage] = useState(1);
+  const [inventoryPageSize, setInventoryPageSize] = useState(10);
 
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualData, setManualData] = useState({
@@ -41,77 +72,39 @@ export default function Dashboard() {
   });
 
   const router = useRouter();
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
 
   const handleLogOut = async () => {
-    try { 
+    try {
       const { error } = await supabase.auth.signOut();
-
       if (error) {
-        console.error("Sign out error:", error.message); 
+        console.error("Sign out error:", error.message);
         localStorage.clear();
       }
- 
       router.refresh();
- 
       router.replace("/login");
-
     } catch (err) {
-      console.error("Unexpected error during sign out:", err); 
+      console.error("Unexpected error during sign out:", err);
       window.location.href = "/login";
     }
   };
 
-  useEffect(() => {
-    const fetchInventory = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          router.push("/login");
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from('inventory')
-          .select('*')
-          .eq('user_id', user.id);
-
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-          const formattedData = data.map(item => ({
-            id: item.record_id || Math.random().toString(),
-            sku: item.sku || "N/A",
-            name: item.medicine,
-            days_to_depletion: Math.floor((item.closing_stock || 0) / (item.expected_demand || 1)),
-            stockout_risk: "Pending AI Analysis",
-            reorder_recommended: false
-          }));
-          setPredictions(formattedData);
-        }
-        setLoading(false);
-      } catch (error) {
-        console.error("Failed to fetch inventory:", error);
-        setLoading(false);
-      }
-    };
-
-    fetchInventory();
-  }, [router, supabase]);
-
-  const downloadCsvTemplate = () => {
+  const downloadCsvTemplate = () => { 
     const columns = [
       "record_id", "date", "year", "month", "quarter", "week_of_year", "day_of_week",
-      "facility_type", "facility_size", "facility_location", "medicine", "medicine_dosage_form",
-      "registered_patients", "outpatient_visits", "prescriptions_issued", "expected_demand",
-      "previous_day_demand", "previous_week_demand", "demand_7_days_avg", "demand_14_days_avg",
-      "demand_30_days_avg", "demand_90_days_avg", "opening_stock", "stock_received", "stock_adjustments",
-      "dispensed_quantity", "closing_stock", "stock_out", "stock_out_days", "lost_demand_units",
-      "supplier_type", "supplier_reliability", "lead_time_days", "purchase_orders", "purchase_order_quantity",
-      "order_delay_days", "safety_stock", "reorder_point", "reorder_flag", "inventory_value_kes",
-      "expiry_risk", "expired_quantity", "damaged_quantity", "unit_cost_kes", "inventory_turnover",
-      "demand_supply_ratio", "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days",
-      "forecast_next_30_days", "forecast_error", "forecast_error_percentage", "stockout_within_30_days"
+      "facility_type", "facility_size", "facility_location_type", "medicine", "medicine_category",
+      "dosage_form", "registered_patients", "outpatient_visits", "prescriptions_issued",
+      "expected_demand", "previous_day_demand", "previous_week_demand", "demand_7_days_avg",
+      "demand_14_days_avg", "demand_30_days_avg", "demand_90_days_avg", "opening_stock",
+      "stock_received", "stock_adjustments", "dispensed_quantity", "closing_stock",
+      "stock_out", "stock_out_days", "lost_demand_units", "supplier_type",
+      "supplier_reliability", "lead_time_days", "purchase_orders", "purchase_order_quantity",
+      "order_delay_days", "orders_cancelled", "safety_stock", "reorder_point",
+      "reorder_flag", "inventory_value_kes", "expiry_risk", "expired_quantity",
+      "damaged_quantity", "unit_cost_kes", "inventory_turnover", "demand_supply_ratio",
+      "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days", "forecast_next_30_days",
+      "forecast_error", "forecast_error_percentage", "stockout_within_30_days",
+      "purchase_order_frequency", "demand_shock"
     ];
 
     const csvContent = "data:text/csv;charset=utf-8," + columns.join(",");
@@ -123,123 +116,379 @@ export default function Dashboard() {
     link.click();
     document.body.removeChild(link);
 
-    // Mark that they have downloaded the template
     setHasDownloadedTemplate(true);
   };
 
-   const handleFileUploadTrigger = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUploadTrigger = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setLoading(true);
-    setNotification(null);
-    setIsUploadModalOpen(false); // Close instructions modal
+    setUploading(true);
+    setNotice(null);
+    setIsUploadModalOpen(false);
 
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: async (results) => {
-          try {
-            // 1. Clean the CSV data for the database 
-            const formattedData = results.data.map((row: any) => {
-              const cleanedRow: any = { ...row };
-              
-              for (const key in cleanedRow) {
-                // NEW: Delete "", "_1", "_2", etc. (any phantom column PapaParse renamed)
-                if (key.trim() === "" || key.match(/^_\d+$/)) {
-                  delete cleanedRow[key];
-                } 
-                // Convert empty cell values to null for the database
-                else if (cleanedRow[key] === "") {
-                  cleanedRow[key] = null;
-                }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setNotice("Your session has expired.");
+      setUploading(false);
+      return;
+    }
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        try {
+          const formattedData = results.data.map((row: any) => {
+            const cleanedRow: any = { ...row };
+            for (const key in cleanedRow) {
+              if (key.trim() === "" || key.match(/^_\d+$/)) {
+                delete cleanedRow[key];
+              } else if (cleanedRow[key] === "") {
+                cleanedRow[key] = null;
               }
-              
-              cleanedRow.user_id = user?.id;
-              cleanedRow.sku = row.sku || `${String(row.medicine || 'MED').substring(0, 3).toUpperCase()}-100`;
-              return cleanedRow;
-            });
+            }
+            cleanedRow.user_id = user.id;
+            cleanedRow.sku = row.sku || `${String(row.medicine || 'MED').substring(0, 3).toUpperCase()}-100`;
+            return cleanedRow;
+          });
 
-            // 2. Prepare the payload for FastAPI
-            const batchPayload = formattedData.map(item => ({
+          const batchPayload = formattedData.map(item => ({
+            sku: item.sku,
+            name: item.medicine,
+            currentStock: Number(item.closing_stock) || 0,
+            dailyDemand: Number(item.expected_demand) || 1,
+            leadTime: Number(item.lead_time_days) || 7
+          }));
+
+          const response = await fetch(`${API_BASE_URL}/api/v1/predict/batch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: batchPayload }),
+          });
+
+          if (!response.ok) {
+            const errorDetails = await response.text();
+            console.error("FastAPI Error Details:", errorDetails);
+            throw new Error(`Batch prediction API failed: ${response.status}`);
+          }
+
+          const aiPredictions = await response.json();
+ 
+          const floatColumns = [
+            "demand_7_days_avg", "demand_14_days_avg", "demand_30_days_avg", "demand_90_days_avg",
+            "inventory_turnover", "unit_cost_kes", "inventory_value_kes", "forecast_error",
+            "stockout_risk_score"
+          ]; 
+
+          const intColumns = [
+            "year", "month", "quarter", "week_of_year", "day_of_week",
+            "registered_patients", "outpatient_visits", "prescriptions_issued",
+            "expected_demand", "previous_day_demand", "previous_week_demand",
+            "opening_stock", "stock_received", "stock_adjustments", "dispensed_quantity", "closing_stock",
+            "stock_out_days", "lost_demand_units", "lead_time_days", "purchase_order_quantity",
+            "order_delay_days", "safety_stock", "reorder_point", "expired_quantity", "damaged_quantity",
+            "adjusted_demand", "forecast_next_7_days", "forecast_next_14_days", "forecast_next_30_days",
+            "stockout_within_30_days"
+          ];  
+
+          const textColumns = [
+            "record_id", "date", "facility_type", "facility_size", "facility_location_type",
+            "medicine", "medicine_category", "dosage_form", "stock_out_flag", "supplier_type",
+            "supplier_reliability", "purchase_order_frequency", "orders_cancelled", "reorder_flag",
+            "expiry_risk", "demand_shock", "forecast_error_percentage", "stockout_risk_category", "sku"
+          ];
+ 
+          const inventoryPayload = formattedData.map(item => {
+            const filteredRow: any = { user_id: user.id };
+ 
+            textColumns.forEach(col => {
+              if (item[col] !== undefined && item[col] !== "") {
+                filteredRow[col] = String(item[col]);
+              }
+            });
+ 
+            floatColumns.forEach(col => {
+              if (item[col] !== undefined && item[col] !== "") {
+                const parsed = Number(item[col]);
+                filteredRow[col] = isNaN(parsed) ? null : parsed;
+              }
+            });
+  
+            intColumns.forEach(col => {
+              if (item[col] !== undefined && item[col] !== "") {
+                const parsed = Number(item[col]);
+                filteredRow[col] = isNaN(parsed) ? null : Math.round(parsed);
+              }
+            });
+ 
+            if (item.stock_out !== undefined && item.stock_out !== "") {
+              filteredRow.stock_out_flag = String(item.stock_out);
+            }
+            if (item.purchase_orders !== undefined && item.purchase_orders !== "") {
+              filteredRow.purchase_order_frequency = String(item.purchase_orders);
+            }
+
+            return filteredRow;
+          });
+ 
+          const { error: invError } = await supabase
+            .from('inventory')
+            .upsert(inventoryPayload, { onConflict: 'record_id' });
+
+          if (invError) throw invError;
+          await loadInventory();
+
+          const rowsToSave = formattedData.map(item => {
+            const matchingAI = aiPredictions.find((ai: any) => ai.sku === item.sku);
+            return {
+              user_id: user.id,
               sku: item.sku,
               name: item.medicine,
-              currentStock: Number(item.closing_stock) || 0,
-              dailyDemand: Number(item.expected_demand) || 1,
-              leadTime: Number(item.lead_time_days) || 7
-            }));
+              days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
+              stockout_risk: matchingAI?.stockout_risk || "Safe",
+              reorder_recommended: matchingAI?.reorder_recommended || false,
+              forecast_next_7_days: matchingAI?.forecast_next_7_days || ((Number(item.expected_demand) || 1) * 7),
+              source: `batch_upload:${file.name}`
+            };
+          });
 
-            // 3. Send the entire batch to Python for ML scoring
-            const response = await fetch("http://127.0.0.1:8000/api/v1/predict/batch", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ items: batchPayload }),
-            });
+          const { data: savedPredictions, error: predError } = await supabase
+            .from('predictions')
+            .insert(rowsToSave)
+            .select("id, sku, name, days_to_depletion, stockout_risk, reorder_recommended, forecast_next_7_days, source");
 
-            if (!response.ok) throw new Error("Batch prediction API failed");
-            
-            // Array of { sku, stockout_risk, reorder_recommended }
-            const aiPredictions = await response.json(); 
-
-            // 4. Save the raw inventory data to Supabase
-            const { error } = await supabase
-              .from('inventory')
-              .upsert(formattedData, { onConflict: 'record_id' });
-
-            if (error) throw error;
-
-            // 5. Merge AI predictions with the React UI State
-            const uiData = formattedData.map(item => {
-              const matchingAI = aiPredictions.find((ai: any) => ai.sku === item.sku);
-              return {
-                id: item.record_id || Math.random().toString(),
-                sku: item.sku,
-                name: item.medicine,
-                days_to_depletion: Math.floor((Number(item.closing_stock) || 0) / (Number(item.expected_demand) || 1)),
-                stockout_risk: matchingAI?.stockout_risk || "Safe",
-                reorder_recommended: matchingAI?.reorder_recommended || false
-              };
-            });
-
-            setPredictions(uiData);
-            setNotification({
-              type: 'success',
-              text: 'Batch processed! ML inferences generated and synchronized.'
-            });
-
-          } catch (error) {
-            console.error("Batch Processing Error:", error);
-            setNotification({
-              type: 'error',
-              text: 'Failed to process batch predictions. Check your file formatting and AI backend connection.'
-            });
-          } finally {
-            setLoading(false);
+          if (predError) {
+            setNotice(`Predictions generated but not saved to history: ${predError.message}`);
+          } else {
+            setNotice('Batch processed! ML inferences generated and synchronized.');
           }
+
+          setPredictions([...(savedPredictions ?? rowsToSave), ...predictions]);
+
+        } catch (error: any) {
+          console.error("Batch Processing Error:", error);
+          setNotice(`Failed to process batch predictions. Check your file formatting and AI backend connection. Error: ${error.message}`);
+        } finally {
+          setUploading(false);
         }
-      });
+      }
     });
   };
 
+  const loadOrders = useCallback(async () => {
+    setOrdersLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, po_reference, sku, medicine, quantity, days_to_depletion, status, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) setNotice(`Orders are unavailable: ${error.message}.`);
+    else setOrders(data ?? []);
+    setOrdersLoading(false);
+  }, [supabase]);
+
+  const loadInventory = useCallback(async () => {
+    setInventoryLoading(true);
+    setInventoryError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("inventory")
+      .select(inventoryFields)
+      .eq("user_id", user.id)
+      .limit(1000);
+
+    if (error) setInventoryError(error.message);
+    else setInventory(data ?? []);
+    setInventoryLoading(false);
+  }, [supabase]);
+
+  const startInventoryEdit = (item: InventoryItem) => {
+    setEditingRecord(item.record_id);
+    setInventoryForm(item);
+  };
+
+  const cancelInventoryEdit = () => {
+    setEditingRecord(null);
+    setInventoryForm({ record_id: "", sku: "", medicine: "", closing_stock: 0, demand_7_days_avg: 0, lead_time_days: 0, reorder_point: 0, unit_cost_kes: 0 });
+  };
+
+  const saveInventory = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const payload = { ...inventoryForm, user_id: user.id };
+
+    const request = editingRecord
+      ? supabase.from("inventory").update(payload).eq("record_id", editingRecord).eq("user_id", user.id)
+      : supabase.from("inventory").insert(payload);
+
+    const { error } = await request;
+    if (error) {
+      setInventoryError(error.message);
+      return;
+    }
+    cancelInventoryEdit();
+    await loadInventory();
+  };
+
+  const deleteInventory = async (recordId: string) => {
+    if (!window.confirm("Delete this inventory record? This cannot be undone.")) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { error } = await supabase.from("inventory").delete().eq("record_id", recordId).eq("user_id", user.id);
+    if (error) setInventoryError(error.message);
+    else await loadInventory();
+  };
+
+  useEffect(() => { 
+    const currentHour = new Date().getHours();
+    if (currentHour < 12) {
+      setGreeting("Good morning");
+    } else if (currentHour < 18) {
+      setGreeting("Good afternoon");
+    } else {
+      setGreeting("Good evening");
+    }
+
+    const fetchPredictions = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          router.push("/login");
+          return;
+        }
+ 
+        const rawName = user.user_metadata?.full_name || user.user_metadata?.name || "there";
+        const firstName = rawName.split(" ")[0];
+        setUserName(firstName.charAt(0).toUpperCase() + firstName.slice(1));
+
+        await loadInventory();
+        await loadOrders();
+
+        const { data: savedPredictions, error: savedError } = await supabase
+          .from("predictions")
+          .select("id, sku, name, days_to_depletion, stockout_risk, reorder_recommended, forecast_next_7_days, source")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false });
+
+        if (savedError) {
+          setNotice(`Prediction history is unavailable: ${savedError.message}.`);
+        }
+ 
+        setPredictions(savedPredictions || []);
+        setLoading(false);
+
+      } catch (error) {
+        console.error("Failed to fetch predictions:", error);
+        setLoading(false);
+      }
+    };
+
+    fetchPredictions();
+  }, [loadInventory, loadOrders, router, supabase]);
+
   const criticalCount = predictions.filter(p => p.stockout_risk === "Critical").length;
   const warningCount = predictions.filter(p => p.stockout_risk === "Warning").length;
+  const inferencePageCount = Math.max(1, Math.ceil(predictions.length / inferencePageSize));
+  const currentInferencePage = Math.min(inferencePage, inferencePageCount);
+  const visiblePredictions = predictions.slice(
+    (currentInferencePage - 1) * inferencePageSize,
+    currentInferencePage * inferencePageSize,
+  );
+  const inventoryPageCount = Math.max(1, Math.ceil(inventory.length / inventoryPageSize));
+  const currentInventoryPage = Math.min(inventoryPage, inventoryPageCount);
+  const visibleInventory = inventory.slice(
+    (currentInventoryPage - 1) * inventoryPageSize,
+    currentInventoryPage * inventoryPageSize,
+  );
 
   const openPOModal = (item: PredictionData) => {
     setSelectedPO(item);
+    setPoReference(`PO-${item.sku}`);
     setOrderQuantity(item.days_to_depletion < 5 ? 1000 : 500);
   };
 
   const closePOModal = () => setSelectedPO(null);
 
+  const submitOrder = async () => {
+    if (!selectedPO) return;
+    if (orders.some((order) => order.sku === selectedPO.sku && ["Review", "Approved"].includes(order.status))) {
+      setNotice(`An active order already exists for ${selectedPO.name}. Edit or cancel it before submitting another order.`);
+      return;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setNotice("Your session has expired. Please sign in again.");
+      return;
+    }
+    const order: Omit<Order, "id" | "created_at"> & { user_id: string } = {
+      user_id: user.id,
+      po_reference: poReference,
+      sku: selectedPO.sku,
+      medicine: selectedPO.name,
+      quantity: orderQuantity,
+      days_to_depletion: selectedPO.days_to_depletion,
+      status: "Review",
+    };
+    const { data, error } = await supabase
+      .from("orders")
+      .insert(order)
+      .select("id, po_reference, sku, medicine, quantity, days_to_depletion, status, created_at")
+      .single();
+    if (error) {
+      setNotice(error.code === "23505" ? `An active order already exists for ${selectedPO.name}.` : `Order was not saved: ${error.message}.`);
+      return;
+    }
+    setOrders((currentOrders) => [data, ...currentOrders]);
+    setSelectedPO(null);
+    setActiveSection("orders");
+  };
+
+  const updateOrder = async () => {
+    if (!editingOrder || editingOrder.quantity < 1) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ quantity: editingOrder.quantity, status: editingOrder.status })
+      .eq("id", editingOrder.id)
+      .eq("user_id", user.id)
+      .select("id, po_reference, sku, medicine, quantity, days_to_depletion, status, created_at")
+      .single();
+    if (error) {
+      setNotice(`Order was not updated: ${error.message}`);
+      return;
+    }
+    setOrders((currentOrders) => currentOrders.map((order) => order.id === data.id ? data : order));
+    setEditingOrder(null);
+  };
+
+  const deleteOrder = async (order: Order) => {
+    if (!window.confirm(`Delete ${order.po_reference}? This cannot be undone.`)) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { error } = await supabase.from("orders").delete().eq("id", order.id).eq("user_id", user.id);
+    if (error) setNotice(`Order was not deleted: ${error.message}`);
+    else setOrders((currentOrders) => currentOrders.filter((item) => item.id !== order.id));
+  };
+
   const handleManualInference = async (e: React.FormEvent) => {
     e.preventDefault();
-    setNotification(null);
-
     try {
-      // 1. Send data to FastAPI for the prediction
-      const response = await fetch("http://127.0.0.1:8000/api/v1/predict/manual", {
+      const response = await fetch(`${API_BASE_URL}/api/v1/predict/manual`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           name: manualData.name,
           sku: manualData.sku,
@@ -249,62 +498,56 @@ export default function Dashboard() {
         }),
       });
 
-      if (!response.ok) throw new Error(`API Error: ${response.status}`);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.detail ?? `API Error: ${response.status}`);
 
-      // The AI prediction results (e.g., stockout_risk)
-      const aiResult = await response.json(); 
-
-      // 2. Format the data for Supabase
+      const newPrediction: PredictionData = result;
       const { data: { user } } = await supabase.auth.getUser();
-      const newRecordId = `MANUAL-${Date.now()}`; // Generate a unique ID for manual entries
+      if (!user) throw new Error("Your session has expired.");
 
+      const currentStock = Number(manualData.currentStock);
+      const dailyDemand = Number(manualData.dailyDemand);
+      const leadTime = Number(manualData.leadTime);
+
+      const newRecordId = `MANUAL-${Date.now()}`;
       const dbRecord = {
-        user_id: user?.id,
+        user_id: user.id,
         record_id: newRecordId,
         sku: manualData.sku,
         medicine: manualData.name,
-        closing_stock: Number(manualData.currentStock),
-        expected_demand: Number(manualData.dailyDemand),
-        lead_time_days: Number(manualData.leadTime),
-        // We leave the rest of the 50 columns blank for manual entries!
+        closing_stock: currentStock,
+        expected_demand: dailyDemand,
+        demand_7_days_avg: dailyDemand, // Fixes the 0 on the dashboard
+        lead_time_days: leadTime,
+        reorder_point: leadTime * dailyDemand, // Accurately calculates Reorder Point
       };
+      await supabase.from('inventory').insert([dbRecord]);
+      await loadInventory();
 
-      // 3. Save to Supabase
-      const { error } = await supabase.from('inventory').insert([dbRecord]);
+      const { data: savedPrediction, error: saveError } = await supabase
+        .from("predictions")
+        .insert({ ...newPrediction, user_id: user.id, source: "manual" })
+        .select("id, sku, name, days_to_depletion, stockout_risk, reorder_recommended, forecast_next_7_days, source")
+        .single();
 
-      if (error) throw error;
+      if (saveError) {
+        setNotice(`Prediction generated, but not saved: ${saveError.message}.`);
+      }
 
-      // 4. Update the UI immediately so the user sees it
-      const newUIRow: PredictionData = {
-        id: newRecordId,
-        sku: manualData.sku,
-        name: manualData.name,
-        days_to_depletion: Math.floor(Number(manualData.currentStock) / Number(manualData.dailyDemand)),
-        stockout_risk: aiResult.stockout_risk || "Pending", 
-        reorder_recommended: aiResult.reorder_recommended || false
-      };
-
-      setPredictions([newUIRow, ...predictions]);
-      
-      // 5. Clean up and show success message
+      setPredictions([savedPrediction ?? newPrediction, ...predictions]);
       setManualData({ name: "", sku: "", currentStock: "", dailyDemand: "", leadTime: "" });
       setIsManualModalOpen(false);
-      setNotification({
-        type: 'success',
-        text: `${manualData.name} prediction completed and saved to your dashboard!`
-      });
+      setNotice(`${manualData.name} prediction completed and saved to your dashboard!`);
 
     } catch (error) {
-      console.error("Failed to process manual prediction:", error);
-      setNotification({
-        type: 'error',
-        text: 'Failed to run prediction or save to database. Ensure your backend is running.'
-      });
+      console.error("Failed to fetch prediction:", error);
+      alert(error instanceof Error ? error.message : "Unable to run the prediction.");
     }
   };
 
   return (
     <div className="relative min-h-screen text-slate-800 font-sans selection:bg-emerald-200 overflow-hidden">
+
       <div className="fixed inset-0 -z-20 w-full h-full bg-slate-900">
         <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-80">
           <source src="dashboard-background-video.mp4" type="video/mp4" />
@@ -314,46 +557,33 @@ export default function Dashboard() {
 
       <div className="p-6 md:p-8 relative z-10 max-w-7xl mx-auto">
 
-        {notification && (
-          <div className={`mb-6 p-4 rounded-2xl flex items-center justify-between border shadow-lg backdrop-xl transition-all animate-in fade-in duration-300 ${notification.type === 'success'
-              ? 'bg-emerald-900/90 text-emerald-100 border-emerald-700'
-              : 'bg-amber-900/90 text-amber-100 border-amber-700'
-            }`}>
-            <div className="flex items-center gap-3">
-              {notification.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-400 shrink-0" /> : <AlertTriangle size={20} className="text-amber-400 shrink-0" />}
-              <p className="text-sm font-semibold">{notification.text}</p>
-            </div>
-            <button onClick={() => setNotification(null)} className="text-white/70 hover:text-white p-1 rounded-full transition-colors">
-              <X size={18} />
-            </button>
-          </div>
-        )}
-
         <header className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-emerald-900/95 backdrop-blur-xl p-6 rounded-3xl shadow-xl border border-emerald-700/50 text-white">
           <div className="flex items-center gap-4">
             <div className="bg-emerald-400/20 p-3.5 rounded-2xl border border-emerald-400/30 shadow-inner">
               <Stethoscope size={28} className="text-emerald-100" />
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold tracking-tight text-white">Triage Dashboard</h1>
+              <h1 className="text-2xl font-extrabold tracking-tight text-white">{greeting}, {userName}!</h1>
               <p className="text-emerald-200/80 text-sm mt-0.5 font-medium">Predictive Stock-Out Prevention Engine</p>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-3">
-            {/* Opens Instructions Modal Instead of File Picker Directly */}
             <button
               onClick={() => setIsUploadModalOpen(true)}
-              className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95"
+              disabled={uploading}
+              className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95 disabled:opacity-60"
             >
-              <UploadCloud size={16} /> Upload Batch CSV
+              <UploadCloud size={16} /> {uploading ? "Processing Batch..." : "Upload Batch CSV"}
             </button>
-
             <button
               onClick={() => setIsManualModalOpen(true)}
               className="bg-emerald-800/50 text-emerald-50 border border-emerald-600/50 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 hover:border-emerald-500 transition-all shadow-sm flex items-center gap-2 active:scale-95"
             >
               <Plus size={16} /> Manual Input
+            </button>
+            <button onClick={() => setActiveSection("orders")} className="bg-white text-emerald-900 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-50 transition-all shadow-sm flex items-center gap-2 active:scale-95">
+              <ClipboardCheck size={16} /> View Orders
             </button>
             <button
               onClick={handleLogOut}
@@ -364,10 +594,17 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* KPI Cards */}
+        {notice && (
+          <div className="mb-6 flex items-start justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 animate-in fade-in duration-300">
+            <span>{notice}</span>
+            <button onClick={() => setNotice(null)} aria-label="Dismiss notification" className="text-amber-700 hover:text-amber-900"><X size={17} /></button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-gradient-to-br from-white to-rose-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg relative overflow-hidden group">
-            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-rose-600"><TrendingDown size={120} /></div>
+
+          <div className="bg-gradient-to-br from-white to-rose-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-rose-600 group-hover:scale-110 transition-transform duration-500"><TrendingDown size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
               <h3 className="font-bold text-slate-500 text-xs uppercase tracking-widest">Critical Risk</h3>
               <div className="bg-rose-100/80 text-rose-600 p-2.5 rounded-xl shadow-sm border border-rose-200/50"><ShieldAlert size={20} strokeWidth={2.5} /></div>
@@ -378,8 +615,8 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-white to-amber-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg relative overflow-hidden group">
-            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-amber-600"><AlertCircle size={120} /></div>
+          <div className="bg-gradient-to-br from-white to-amber-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-amber-600 group-hover:scale-110 transition-transform duration-500"><AlertCircle size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
               <h3 className="font-bold text-slate-500 text-xs uppercase tracking-widest">Approaching Buffer</h3>
               <div className="bg-amber-100/80 text-amber-700 p-2.5 rounded-xl shadow-sm border border-amber-200/50"><AlertCircle size={20} strokeWidth={2.5} /></div>
@@ -390,8 +627,8 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-white to-emerald-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg relative overflow-hidden group">
-            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-emerald-600"><PackageCheck size={120} /></div>
+          <div className="bg-gradient-to-br from-white to-emerald-50/50 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-lg hover:shadow-xl transition-shadow relative overflow-hidden group">
+            <div className="absolute -right-4 -top-4 p-8 opacity-[0.03] text-emerald-600 group-hover:scale-110 transition-transform duration-500"><PackageCheck size={120} /></div>
             <div className="flex items-center justify-between mb-6 relative z-10">
               <h3 className="font-bold text-slate-500 text-xs uppercase tracking-widest">Total Monitored</h3>
               <div className="bg-emerald-100/80 text-emerald-700 p-2.5 rounded-xl shadow-sm border border-emerald-200/50"><PackageCheck size={20} strokeWidth={2.5} /></div>
@@ -403,8 +640,31 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Results Table */}
-        <div className="bg-white/90 backdrop-blur-xl border border-white/60 rounded-3xl shadow-xl overflow-hidden">
+        <div className="mb-4 bg-white/80 backdrop-blur-xl border border-white/60 rounded-2xl shadow-lg p-2 flex flex-col sm:flex-row gap-2">
+          <button
+            onClick={() => setActiveSection("inference")}
+            className={`flex-1 rounded-xl px-5 py-3 text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeSection === "inference" ? "bg-emerald-900 text-white shadow-md" : "text-slate-500 hover:bg-emerald-50 hover:text-emerald-800"}`}
+          >
+            <Activity size={17} /> Inference Results
+            <span className={`rounded-full px-2 py-0.5 text-xs ${activeSection === "inference" ? "bg-white/15 text-emerald-100" : "bg-slate-100 text-slate-500"}`}>{predictions.length}</span>
+          </button>
+          <button
+            onClick={() => setActiveSection("records")}
+            className={`flex-1 rounded-xl px-5 py-3 text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeSection === "records" ? "bg-emerald-900 text-white shadow-md" : "text-slate-500 hover:bg-emerald-50 hover:text-emerald-800"}`}
+          >
+            <ClipboardList size={17} /> Inventory Records
+            <span className={`rounded-full px-2 py-0.5 text-xs ${activeSection === "records" ? "bg-white/15 text-emerald-100" : "bg-slate-100 text-slate-500"}`}>{inventory.length}</span>
+          </button>
+          <button
+            onClick={() => setActiveSection("orders")}
+            className={`flex-1 rounded-xl px-5 py-3 text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeSection === "orders" ? "bg-emerald-900 text-white shadow-md" : "text-slate-500 hover:bg-emerald-50 hover:text-emerald-800"}`}
+          >
+            <ClipboardCheck size={17} /> Orders
+            <span className={`rounded-full px-2 py-0.5 text-xs ${activeSection === "orders" ? "bg-white/15 text-emerald-100" : "bg-slate-100 text-slate-500"}`}>{orders.length}</span>
+          </button>
+        </div>
+
+        {activeSection === "inference" && <div className="bg-white/90 backdrop-blur-xl border border-white/60 rounded-3xl shadow-xl overflow-hidden">
           <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white/50">
             <div className="flex items-center gap-3">
               <div className="bg-emerald-100 p-2 rounded-lg text-emerald-700"><Activity size={18} strokeWidth={2.5} /></div>
@@ -415,12 +675,7 @@ export default function Dashboard() {
           {loading ? (
             <div className="p-16 text-center">
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-emerald-200 border-t-emerald-600 mb-4"></div>
-              <p className="text-slate-500 font-medium">Querying database...</p>
-            </div>
-          ) : predictions.length === 0 ? (
-            <div className="p-16 text-center">
-              <p className="text-slate-500 font-medium mb-2">No inventory data found for this account.</p>
-              <p className="text-xs text-slate-400">Click "Upload Batch CSV" above to review instructions and template requirements.</p>
+              <p className="text-slate-500 font-medium">Querying ML predictions...</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -429,13 +684,14 @@ export default function Dashboard() {
                   <tr>
                     <th className="px-6 py-4 font-bold">Medication & SKU</th>
                     <th className="px-6 py-4 font-bold">Depletion Horizon</th>
+                    <th className="px-6 py-4 font-bold">7-Day Forecast</th>
                     <th className="px-6 py-4 font-bold">Risk Assessment</th>
                     <th className="px-6 py-4 font-bold text-right">Procurement Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100/80">
-                  {predictions.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
+                  {visiblePredictions.map((item, index) => (
+                    <tr key={item.id ? `pred-${item.id}` : `new-${item.sku}-${index}`} className="hover:bg-slate-50/80 transition-colors group">
                       <td className="px-6 py-4">
                         <div className="font-bold text-slate-900 text-base">{item.name}</div>
                         <div className="text-xs text-slate-500 font-medium mt-1">{item.sku}</div>
@@ -454,13 +710,18 @@ export default function Dashboard() {
                           </div>
                         </div>
                       </td>
+                      <td className="px-6 py-4 font-bold text-slate-700">
+                        {item.forecast_next_7_days ? item.forecast_next_7_days.toFixed(2) : "N/A"} units
+                      </td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border 
                           ${item.stockout_risk === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200/70" :
                             item.stockout_risk === "Warning" ? "bg-amber-50 text-amber-700 border-amber-200/70" :
-                              item.stockout_risk === "Safe" ? "bg-emerald-50 text-emerald-700 border-emerald-200/70" :
-                                "bg-slate-50 text-slate-700 border-slate-200/70"
+                              "bg-emerald-50 text-emerald-700 border-emerald-200/70"
                           }`}>
+                          {item.stockout_risk === "Critical" && <ShieldAlert size={14} />}
+                          {item.stockout_risk === "Warning" && <AlertCircle size={14} />}
+                          {item.stockout_risk === "Safe" && <CheckCircle2 size={14} />}
                           {item.stockout_risk}
                         </span>
                       </td>
@@ -468,7 +729,7 @@ export default function Dashboard() {
                         {item.reorder_recommended ? (
                           <button
                             onClick={() => openPOModal(item)}
-                            className="bg-slate-900 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 ml-auto active:scale-95"
+                            className="bg-slate-900 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md hover:shadow-lg flex items-center gap-2 ml-auto active:scale-95"
                           >
                             <ShoppingCart size={14} /> Draft PO <ChevronRight size={14} className="opacity-70" />
                           </button>
@@ -484,7 +745,181 @@ export default function Dashboard() {
               </table>
             </div>
           )}
+          {!loading && predictions.length > 0 && (
+            <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/50 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <label htmlFor="inference-page-size" className="text-xs font-semibold text-slate-500">Rows per page</label>
+                <input
+                  id="inference-page-size"
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={inferencePageSize}
+                  onChange={(event) => {
+                    const nextSize = Math.min(50, Math.max(1, Number(event.target.value) || 1));
+                    setInferencePageSize(nextSize);
+                    setInferencePage(1);
+                  }}
+                  className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-xs font-bold text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                />
+                <p className="text-xs font-semibold text-slate-500">
+                  Showing {(currentInferencePage - 1) * inferencePageSize + 1}-{Math.min(currentInferencePage * inferencePageSize, predictions.length)} of {predictions.length} results
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setInferencePage((page) => Math.max(1, page - 1))}
+                  disabled={currentInferencePage === 1}
+                  aria-label="Previous inference results page"
+                  className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 shadow-sm transition hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="min-w-20 text-center text-xs font-bold text-slate-600">Page {currentInferencePage} of {inferencePageCount}</span>
+                <button
+                  onClick={() => setInferencePage((page) => Math.min(inferencePageCount, page + 1))}
+                  disabled={currentInferencePage === inferencePageCount}
+                  aria-label="Next inference results page"
+                  className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 shadow-sm transition hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+        }
+
+        {activeSection === "records" && <div className="bg-white/90 backdrop-blur-xl border border-white/60 rounded-3xl shadow-xl overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/50">
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-900">Inventory Records</h2>
+              <p className="text-sm text-slate-500 mt-1">Manage source records used for forecasting.</p>
+            </div>
+            <button onClick={cancelInventoryEdit} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2">
+              <Plus size={16} /> New Record
+            </button>
+          </div>
+
+          {inventoryError && <p className="mx-6 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">{inventoryError}</p>}
+
+          {editingRecord === null && inventoryForm.record_id === "" && (
+            <div className="p-6 border-b border-slate-100 bg-emerald-50/30">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                {(["record_id", "sku", "medicine"] as const).map((field) => (
+                  <input key={field} required value={inventoryForm[field]} onChange={(event) => setInventoryForm({ ...inventoryForm, [field]: event.target.value })} placeholder={field.replaceAll("_", " ")} className="lg:col-span-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500" />
+                ))}
+                {(["closing_stock", "demand_7_days_avg", "lead_time_days", "reorder_point", "unit_cost_kes"] as const).map((field) => (
+                  <input key={field} required type="number" min="0" value={inventoryForm[field] ?? 0} onChange={(event) => setInventoryForm({ ...inventoryForm, [field]: Number(event.target.value) })} placeholder={field.replaceAll("_", " ")} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500" />
+                ))}
+              </div>
+              <button onClick={saveInventory} className="mt-4 bg-slate-900 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><Save size={15} /> Save Record</button>
+            </div>
+          )}
+
+          {inventoryLoading ? <p className="p-8 text-center text-sm text-slate-500">Loading inventory...</p> : inventory.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No inventory records found.</p> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50/80 text-slate-500 border-b border-slate-100 text-xs uppercase tracking-wider">
+                  <tr><th className="px-6 py-4">Record / SKU</th><th className="px-6 py-4">Medicine</th><th className="px-6 py-4">Closing Stock</th><th className="px-6 py-4">7-Day Demand</th><th className="px-6 py-4">Lead Time</th><th className="px-6 py-4">Reorder Point</th><th className="px-6 py-4 text-right">Actions</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100/80">
+                  {visibleInventory.map((item) => editingRecord === item.record_id ? (
+                    <tr key={item.record_id} className="bg-emerald-50/40">
+                      <td className="px-6 py-3"><div className="text-xs text-slate-500">{item.record_id}</div><input value={inventoryForm.sku} onChange={(event) => setInventoryForm({ ...inventoryForm, sku: event.target.value })} className="mt-1 w-28 rounded border border-slate-200 px-2 py-1 text-sm" /></td>
+                      <td className="px-6 py-3"><input value={inventoryForm.medicine} onChange={(event) => setInventoryForm({ ...inventoryForm, medicine: event.target.value })} className="w-36 rounded border border-slate-200 px-2 py-1 text-sm" /></td>
+                      {(["closing_stock", "demand_7_days_avg", "lead_time_days", "reorder_point"] as const).map((field) => <td key={field} className="px-6 py-3"><input type="number" min="0" value={inventoryForm[field] ?? 0} onChange={(event) => setInventoryForm({ ...inventoryForm, [field]: Number(event.target.value) })} className="w-24 rounded border border-slate-200 px-2 py-1 text-sm" /></td>)}
+                      <td className="px-6 py-3 text-right"><button onClick={saveInventory} aria-label="Save inventory record" className="mr-2 text-emerald-700"><Save size={17} /></button><button onClick={cancelInventoryEdit} aria-label="Cancel editing" className="text-slate-500"><X size={17} /></button></td>
+                    </tr>
+                  ) : (
+                    <tr key={item.record_id} className="hover:bg-slate-50/80">
+                      <td className="px-6 py-4"><div className="font-bold text-slate-900">{item.record_id}</div><div className="text-xs text-slate-500">{item.sku}</div></td><td className="px-6 py-4 font-semibold text-slate-800">{item.medicine}</td><td className="px-6 py-4">{item.closing_stock ?? 0}</td><td className="px-6 py-4">{item.demand_7_days_avg ?? 0}</td><td className="px-6 py-4">{item.lead_time_days ?? 0} days</td><td className="px-6 py-4">{item.reorder_point ?? 0}</td><td className="px-6 py-4 text-right"><button onClick={() => startInventoryEdit(item)} aria-label={`Edit ${item.medicine}`} className="mr-3 text-slate-500 hover:text-emerald-700"><Pencil size={17} /></button><button onClick={() => deleteInventory(item.record_id)} aria-label={`Delete ${item.medicine}`} className="text-slate-500 hover:text-rose-600"><Trash2 size={17} /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!inventoryLoading && inventory.length > 0 && (
+            <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/50 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <label htmlFor="inventory-page-size" className="text-xs font-semibold text-slate-500">Rows per page</label>
+                <input
+                  id="inventory-page-size"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={inventoryPageSize}
+                  onChange={(event) => {
+                    const nextSize = Math.min(100, Math.max(1, Number(event.target.value) || 1));
+                    setInventoryPageSize(nextSize);
+                    setInventoryPage(1);
+                  }}
+                  className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-xs font-bold text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                />
+                <p className="text-xs font-semibold text-slate-500">
+                  Showing {(currentInventoryPage - 1) * inventoryPageSize + 1}-{Math.min(currentInventoryPage * inventoryPageSize, inventory.length)} of {inventory.length} records
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setInventoryPage((page) => Math.max(1, page - 1))}
+                  disabled={currentInventoryPage === 1}
+                  aria-label="Previous inventory page"
+                  className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 shadow-sm transition hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="min-w-20 text-center text-xs font-bold text-slate-600">Page {currentInventoryPage} of {inventoryPageCount}</span>
+                <button
+                  onClick={() => setInventoryPage((page) => Math.min(inventoryPageCount, page + 1))}
+                  disabled={currentInventoryPage === inventoryPageCount}
+                  aria-label="Next inventory page"
+                  className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 shadow-sm transition hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>}
+
+        {activeSection === "orders" && <div className="bg-white/90 backdrop-blur-xl border border-white/60 rounded-3xl shadow-xl overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-100 bg-white/50">
+            <div className="flex items-center gap-3">
+              <div className="bg-emerald-100 p-2 rounded-lg text-emerald-700"><ClipboardCheck size={18} strokeWidth={2.5} /></div>
+              <div>
+                <h2 className="text-lg font-extrabold text-slate-900">Purchase Orders</h2>
+                <p className="text-sm text-slate-500 mt-1">Orders submitted for procurement review.</p>
+              </div>
+            </div>
+          </div>
+          {ordersLoading ? <p className="p-8 text-center text-sm text-slate-500">Loading orders...</p> : orders.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No purchase orders submitted yet.</p> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50/80 text-slate-500 border-b border-slate-100 text-xs uppercase tracking-wider">
+                  <tr><th className="px-6 py-4">PO Reference</th><th className="px-6 py-4">Medicine / SKU</th><th className="px-6 py-4">Quantity</th><th className="px-6 py-4">Depletion</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Submitted</th><th className="px-6 py-4 text-right">Actions</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100/80">
+                  {orders.map((order) => (
+                    <tr key={order.id} className="hover:bg-slate-50/80">
+                      <td className="px-6 py-4 font-bold text-slate-900">{order.po_reference}</td>
+                      <td className="px-6 py-4"><div className="font-semibold text-slate-800">{order.medicine}</div><div className="text-xs text-slate-500">{order.sku}</div></td>
+                      <td className="px-6 py-4 font-semibold text-slate-700">{order.quantity} units</td>
+                      <td className="px-6 py-4 text-slate-700">{order.days_to_depletion} days</td>
+                      <td className="px-6 py-4"><span className="inline-flex rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700">{order.status}</span></td>
+                      <td className="px-6 py-4 text-slate-500">{new Date(order.created_at).toLocaleDateString()}</td>
+                      <td className="px-6 py-4 text-right">
+                        <button onClick={() => setEditingOrder({ ...order })} aria-label={`Edit ${order.po_reference}`} className="mr-3 text-slate-500 hover:text-emerald-700"><Pencil size={17} /></button>
+                        <button onClick={() => deleteOrder(order)} aria-label={`Delete ${order.po_reference}`} className="text-slate-500 hover:text-rose-600"><Trash2 size={17} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>}
       </div>
 
       {/* CSV Upload Instructions & Requirement Modal */}
@@ -545,8 +980,8 @@ export default function Dashboard() {
                 <button
                   onClick={downloadCsvTemplate}
                   className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${hasDownloadedTemplate
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-slate-900 text-white hover:bg-emerald-600 shadow-sm'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-slate-900 text-white hover:bg-emerald-600 shadow-sm'
                     }`}
                 >
                   {hasDownloadedTemplate ? <><Check size={14} /> Template Downloaded</> : <><Download size={14} /> Download Template</>}
@@ -562,7 +997,6 @@ export default function Dashboard() {
                 Cancel
               </button>
 
-              {/* Proceed to File Selection */}
               <label className={`px-6 py-2.5 rounded-xl text-sm font-bold text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 ${hasDownloadedTemplate ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-400 hover:bg-slate-500'
                 }`}>
                 <UploadCloud size={16} /> Proceed to Upload
@@ -573,10 +1007,81 @@ export default function Dashboard() {
         </div>
       )}
 
+      {selectedPO && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 transform scale-100 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
+              <div>
+                <h2 className="text-xl font-extrabold text-slate-900">Purchase Order</h2>
+                <p className="text-xs text-slate-500 mt-1 font-medium">Ref: {poReference} • Auto-Generated</p>
+              </div>
+              <button onClick={closePOModal} className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-200 p-2.5 rounded-full transition-colors shadow-sm">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="flex items-start justify-between bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Target SKU</p>
+                  <p className="text-lg font-bold text-slate-900">{selectedPO.name}</p>
+                  <p className="text-sm text-slate-500 font-medium">{selectedPO.sku}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Lead Time</p>
+                  <p className="text-lg font-bold text-slate-900">7 Days</p>
+                </div>
+              </div>
+              <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-5 flex gap-4">
+                <div className="bg-emerald-100 p-2 rounded-xl h-fit text-emerald-600"><Activity size={20} /></div>
+                <div>
+                  <h4 className="text-sm font-bold text-emerald-900">Model Recommendation</h4>
+                  <p className="text-sm text-emerald-800/80 mt-1.5 leading-relaxed">
+                    Predicted depletion in <span className="font-bold">{selectedPO.days_to_depletion} days</span>. Reordering {orderQuantity} units mitigates 30-day stock-out risk.
+                  </p>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">Confirm Quantity (Units)</label>
+                <input
+                  type="number"
+                  value={orderQuantity}
+                  onChange={(e) => setOrderQuantity(Number(e.target.value))}
+                  className="w-full bg-white border border-slate-200 text-black text-lg font-bold rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 block p-3.5 shadow-sm transition-all outline-none"
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-100 flex gap-3 justify-end bg-slate-50/50">
+              <button onClick={closePOModal} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-colors shadow-sm active:scale-95">
+                Cancel
+              </button>
+              <button onClick={submitOrder} className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-md flex items-center gap-2 active:scale-95">
+                <ClipboardCheck size={16} /> Submit for Review
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 p-6">
+              <div><h2 className="text-xl font-extrabold text-slate-900">Edit Purchase Order</h2><p className="mt-1 text-xs font-medium text-slate-500">{editingOrder.po_reference}</p></div>
+              <button onClick={() => setEditingOrder(null)} aria-label="Close edit order dialog" className="rounded-full bg-white p-2.5 text-slate-400 shadow-sm hover:bg-slate-200 hover:text-slate-700"><X size={20} /></button>
+            </div>
+            <div className="space-y-5 p-6">
+              <div><label htmlFor="edit-order-quantity" className="mb-2 block text-sm font-bold text-slate-700">Quantity (Units)</label><input id="edit-order-quantity" type="number" min="1" value={editingOrder.quantity} onChange={(event) => setEditingOrder({ ...editingOrder, quantity: Math.max(1, Number(event.target.value) || 1) })} className="w-full rounded-xl border border-slate-200 p-3 text-black outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" /></div>
+              <div><label htmlFor="edit-order-status" className="mb-2 block text-sm font-bold text-slate-700">Status</label><select id="edit-order-status" value={editingOrder.status} onChange={(event) => setEditingOrder({ ...editingOrder, status: event.target.value as Order["status"] })} className="w-full rounded-xl border border-slate-200 bg-white p-3 text-black outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"><option value="Review">Review</option><option value="Approved">Approved</option><option value="Received">Received</option><option value="Cancelled">Cancelled</option></select></div>
+            </div>
+            <div className="flex justify-end gap-3 border-t border-slate-100 bg-slate-50/50 p-6"><button onClick={() => setEditingOrder(null)} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100">Cancel</button><button onClick={updateOrder} className="flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-bold text-white shadow-md hover:bg-emerald-700"><Save size={16} /> Save Changes</button></div>
+          </div>
+        </div>
+      )}
+
       {/* Manual Input Modal */}
       {isManualModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 transform scale-100 animate-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
               <div>
                 <h2 className="text-xl font-extrabold text-slate-900">Run Inference</h2>
@@ -590,30 +1095,30 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Medication Name</label>
-                  <input required type="text" value={manualData.name} onChange={e => setManualData({ ...manualData, name: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" placeholder="e.g. Insulin" />
+                  <input required type="text" value={manualData.name} onChange={e => setManualData({ ...manualData, name: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" placeholder="e.g. Insulin" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">SKU</label>
-                  <input required type="text" value={manualData.sku} onChange={e => setManualData({ ...manualData, sku: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" placeholder="INS-100" />
+                  <input required type="text" value={manualData.sku} onChange={e => setManualData({ ...manualData, sku: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" placeholder="INS-100" />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-4 border-t border-slate-100 pt-5">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Current Stock</label>
-                  <input required type="number" value={manualData.currentStock} onChange={e => setManualData({ ...manualData, currentStock: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" />
+                  <input required type="number" value={manualData.currentStock} onChange={e => setManualData({ ...manualData, currentStock: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Daily Demand</label>
-                  <input required type="number" value={manualData.dailyDemand} onChange={e => setManualData({ ...manualData, dailyDemand: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" />
+                  <input required type="number" value={manualData.dailyDemand} onChange={e => setManualData({ ...manualData, dailyDemand: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Lead (Days)</label>
-                  <input required type="number" value={manualData.leadTime} onChange={e => setManualData({ ...manualData, leadTime: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm" />
+                  <input required type="number" value={manualData.leadTime} onChange={e => setManualData({ ...manualData, leadTime: e.target.value })} className="w-full bg-white border border-slate-200 text-black rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm" />
                 </div>
               </div>
               <div className="pt-2 flex justify-end gap-3">
-                <button type="button" onClick={() => setIsManualModalOpen(false)} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 shadow-sm transition-all">Cancel</button>
-                <button type="submit" className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-slate-900 hover:bg-emerald-600 flex items-center gap-2 shadow-md transition-all">
+                <button type="button" onClick={() => setIsManualModalOpen(false)} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 shadow-sm active:scale-95 transition-all">Cancel</button>
+                <button type="submit" className="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-slate-900 hover:bg-emerald-600 flex items-center gap-2 shadow-md active:scale-95 transition-all">
                   <Activity size={16} /> Predict
                 </button>
               </div>
@@ -624,3 +1129,27 @@ export default function Dashboard() {
     </div>
   );
 }
+
+interface InventoryItem {
+  record_id: string;
+  sku: string;
+  medicine: string;
+  closing_stock: number | null;
+  demand_7_days_avg: number | null;
+  lead_time_days: number | null;
+  reorder_point: number | null;
+  unit_cost_kes: number | null;
+}
+
+interface Order {
+  id: number;
+  po_reference: string;
+  sku: string;
+  medicine: string;
+  quantity: number;
+  days_to_depletion: number;
+  status: "Review" | "Approved" | "Received" | "Cancelled";
+  created_at: string;
+}
+
+const inventoryFields = "record_id, sku, medicine, closing_stock, demand_7_days_avg, lead_time_days, reorder_point, unit_cost_kes";
