@@ -51,7 +51,7 @@ export default function LandingPage() {
           </Link>
           
           <a 
-            href={`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/docs`}
+            href={`${process.env.NEXT_PUBLIC_API_BASE_URL || 'https://medicine-demand-forecast-and-stock-out-9qje.onrender.com' ||'http://localhost:8000'}/docs`}
             target="_blank" 
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center px-8 py-4 text-base font-bold text-slate-800 bg-white/90 backdrop-blur-md border border-slate-200 rounded-xl hover:border-emerald-600 hover:text-emerald-700 transition-all shadow-sm"
@@ -111,7 +111,7 @@ export default function LandingPage() {
               <ul className="space-y-3 text-sm text-emerald-100 font-medium">
                 <li>
                   <a 
-                    href={`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/docs`}
+                    href={`${process.env.NEXT_PUBLIC_API_BASE_URL||'https://medicine-demand-forecast-and-stock-out-9qje.onrender.com' || 'http://localhost:8000'}/docs`}
                     target="_blank" 
                     rel="noopener noreferrer"
                     className="hover:text-white transition-colors"
