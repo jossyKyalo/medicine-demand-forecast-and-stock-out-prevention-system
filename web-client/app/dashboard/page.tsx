@@ -39,6 +39,9 @@ export default function Dashboard() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [hasDownloadedTemplate, setHasDownloadedTemplate] = useState(false);
 
+  // Modal State for Legal Policies (Privacy / Terms)
+  const [activeModal, setActiveModal] = useState<'privacy' | 'terms' | null>(null);
+
   const [inventoryForm, setInventoryForm] = useState<InventoryItem>({
     record_id: "",
     sku: "",
@@ -582,8 +585,70 @@ export default function Dashboard() {
     }
   };
 
+  // Helper to render the legal modal
+  const renderModal = () => {
+    if (!activeModal) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm text-left">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50">
+            <h2 className="text-xl font-bold text-slate-800">
+              {activeModal === 'privacy' ? 'Privacy Policy' : 'Terms of Service'}
+            </h2>
+            <button 
+              onClick={() => setActiveModal(null)}
+              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <div className="p-6 overflow-y-auto text-sm text-slate-600 space-y-4">
+            {activeModal === 'privacy' && (
+              <>
+                <p><strong>Effective Date:</strong> {new Date().toLocaleDateString()}</p>
+                <p>Welcome to Afya-Stock AI. We are committed to protecting your personal information and your right to privacy.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">1. Information We Collect</h3>
+                <p>We collect personal information that you voluntarily provide to us when you register on the application, including your name, email address, and authentication credentials. We also securely process inventory and supply chain data uploaded to our machine learning forecasting engines.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">2. How We Use Your Information</h3>
+                <p>We use the information we collect to facilitate account creation and logon processes, deliver AI-driven forecasting services to you, send administrative information, and ensure the security of our platform.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">3. Information Sharing</h3>
+                <p>We only share information with your consent, to comply with laws, to provide you with services (e.g., our cloud hosting and database providers), to protect your rights, or to fulfill business obligations. We do not sell your data.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">4. Data Security</h3>
+                <p>We have implemented appropriate technical and organizational security measures designed to protect the security of any personal information we process. However, despite our safeguards, no internet transmission is 100% secure.</p>
+              </>
+            )}
+            {activeModal === 'terms' && (
+              <>
+                <p><strong>Effective Date:</strong> {new Date().toLocaleDateString()}</p>
+                <p>Please read these Terms of Service carefully before using Afya-Stock AI.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">1. Acceptance of Terms</h3>
+                <p>By accessing or using Afya-Stock AI, you agree to be bound by these terms. If you disagree with any part of the terms, you may not access the service.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">2. Use of the Service</h3>
+                <p>You agree to use the service only for lawful purposes related to inventory and supply chain management. You are responsible for safeguarding the password that you use to access the service.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">3. Medical Supply Chain Disclaimer (Important)</h3>
+                <p><strong>Afya-Stock AI is a decision-support tool.</strong> Our machine learning algorithms provide estimates and forecasts regarding medical stock levels. These forecasts are not guarantees. The service is strictly intended to assist, not replace, professional human oversight in procurement. We are not liable for any stock-outs, medical emergencies, or damages resulting from over-reliance on our automated forecasts.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">4. Limitation of Liability</h3>
+                <p>In no event shall Afya-Stock AI, nor its developers or partners, be liable for any indirect, incidental, special, consequential or punitive damages resulting from your use of the service.</p>
+                <h3 className="text-base font-bold text-slate-800 pt-2">5. Governing Law</h3>
+                <p>These Terms shall be governed and construed in accordance with the laws of Kenya, without regard to its conflict of law provisions.</p>
+              </>
+            )}
+          </div>
+          <div className="p-4 border-t border-slate-100 bg-slate-50 text-right flex-shrink-0">
+            <button 
+              onClick={() => setActiveModal(null)}
+              className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="relative min-h-screen text-slate-800 font-sans selection:bg-emerald-200 overflow-hidden">
+    <div className="relative min-h-screen flex flex-col text-slate-800 font-sans selection:bg-emerald-200 overflow-x-hidden">
 
       <div className="fixed inset-0 -z-20 w-full h-full bg-slate-900">
         <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-80">
@@ -592,15 +657,18 @@ export default function Dashboard() {
       </div>
       <div className="fixed inset-0 -z-10 bg-slate-50/80 backdrop-blur-sm"></div>
 
-      <div className="p-6 md:p-8 relative z-10 max-w-7xl mx-auto">
+      {/* MAIN CONTENT WRAPPER */}
+      <main className="flex-1 p-6 md:p-8 relative z-10 max-w-7xl mx-auto w-full">
 
         <header className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-emerald-900/95 backdrop-blur-xl p-6 rounded-3xl shadow-xl border border-emerald-700/50 text-white">
-          <div className="flex items-center gap-4">
+           <div className="flex items-center gap-4">
             <div className="bg-emerald-400/20 p-3.5 rounded-2xl border border-emerald-400/30 shadow-inner">
               <Stethoscope size={28} className="text-emerald-100" />
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold tracking-tight text-white">{greeting}, {userName}!</h1>
+              <h1 className="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2">
+                <span className="animate-wave text-2xl">👋</span> {greeting}, {userName}!
+              </h1>
               <p className="text-emerald-200/80 text-sm mt-0.5 font-medium">Predictive Stock-Out Prevention Engine</p>
             </div>
           </div>
@@ -957,7 +1025,28 @@ export default function Dashboard() {
             </div>
           )}
         </div>}
-      </div>
+      </main>
+
+      {/* DASHBOARD UTILITY FOOTER */}
+      <footer className="relative z-10 w-full border-t border-slate-200/60 bg-white/80 backdrop-blur-md pt-6 pb-6 text-center text-xs font-medium text-slate-500 mt-auto">
+        <div className="flex flex-wrap items-center justify-center gap-4 mb-2">
+          <button onClick={() => setActiveModal('privacy')} className="hover:text-emerald-600 transition-colors">Privacy Policy</button>
+          <span>•</span>
+          <button onClick={() => setActiveModal('terms')} className="hover:text-emerald-600 transition-colors">Terms of Service</button>
+          <span>•</span>
+          <a 
+            href={`${API_BASE_URL}/docs`}
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="hover:text-emerald-600 transition-colors"
+          >
+            API Docs
+          </a>
+          <span>•</span>
+          <span>Version 1.0.0</span>
+        </div>
+        <p>© {new Date().getFullYear()} Afya-Stock AI. All rights reserved.</p>
+      </footer>
 
       {/* CSV Upload Instructions & Requirement Modal */}
       {isUploadModalOpen && (
@@ -1163,6 +1252,9 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* RENDER THE LEGAL MODAL OVERLAY */}
+      {renderModal()}
     </div>
   );
 }
