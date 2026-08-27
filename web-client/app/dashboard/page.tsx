@@ -939,7 +939,7 @@ export default function Dashboard() {
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-50/80 text-slate-500 border-b border-slate-100 text-xs uppercase tracking-wider">
-                  <tr><th className="px-6 py-4">Record / SKU</th><th className="px-6 py-4">Medicine</th><th className="px-6 py-4">Closing Stock</th><th className="px-6 py-4">7-Day Demand</th><th className="px-6 py-4">Lead Time</th><th className="px-6 py-4">Reorder Point</th><th className="px-6 py-4 text-right">Actions</th></tr>
+                  <tr><th className="px-6 py-4">Record / SKU</th><th className="px-6 py-4">Medicine</th><th className="px-6 py-4">Closing Stock</th><th className="px-6 py-4">Average Daily Demand</th><th className="px-6 py-4">Lead Time</th><th className="px-6 py-4">Reorder Point</th><th className="px-6 py-4 text-right">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100/80">
                   {visibleInventory.map((item) => editingRecord === item.record_id ? (
